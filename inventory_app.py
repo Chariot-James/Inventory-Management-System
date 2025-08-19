@@ -15,47 +15,117 @@ def init_connection():
 conn = init_connection()
 c = conn.cursor()
 
-# Create table if not exists (with cost column)
-c.execute('''
-CREATE TABLE IF NOT EXISTS inventory (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    brand TEXT NOT NULL,
-    product_name TEXT NOT NULL,
-    product_id TEXT NOT NULL,
-    min_qty INTEGER,
-    current_qty INTEGER,
-    cost REAL DEFAULT 0.0,
-    last_checked TEXT
-)
-''')
+# --- Database Migration Function ---
+def migrate_database():
+    """Migrate database to new schema with renamed columns and new fields"""
+    try:
+        # Get current table schema
+        c.execute("PRAGMA table_info(inventory)")
+        columns = c.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        # Check if we need to migrate (old column names exist)
+        needs_migration = 'min_qty' in column_names or 'current_qty' in column_names
+        
+        if needs_migration:
+            # Create new table with updated schema
+            c.execute('''
+                CREATE TABLE inventory_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    brand TEXT NOT NULL,
+                    product_name TEXT NOT NULL,
+                    product_id TEXT NOT NULL,
+                    minimum_individual_quantity INTEGER,
+                    current_individual_quantity INTEGER,
+                    per_box INTEGER,
+                    per_case INTEGER,
+                    cost REAL DEFAULT 0.0,
+                    last_checked TEXT
+                )
+            ''')
+            
+            # Copy data from old table to new table
+            c.execute('''
+                INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, cost, last_checked)
+                SELECT id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked
+                FROM inventory
+            ''')
+            
+            # Replace old table with new one
+            c.execute('DROP TABLE inventory')
+            c.execute('ALTER TABLE inventory_new RENAME TO inventory')
+            
+        else:
+            # Check if we already have the new column names but missing per_box/per_case
+            if 'minimum_individual_quantity' in column_names:
+                # Just add missing columns if needed
+                if 'per_box' not in column_names:
+                    c.execute('ALTER TABLE inventory ADD COLUMN per_box INTEGER')
+                if 'per_case' not in column_names:
+                    c.execute('ALTER TABLE inventory ADD COLUMN per_case INTEGER')
+            else:
+                # Create table with new schema from scratch
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS inventory (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        brand TEXT NOT NULL,
+                        product_name TEXT NOT NULL,
+                        product_id TEXT NOT NULL,
+                        minimum_individual_quantity INTEGER,
+                        current_individual_quantity INTEGER,
+                        per_box INTEGER,
+                        per_case INTEGER,
+                        cost REAL DEFAULT 0.0,
+                        last_checked TEXT
+                    )
+                ''')
+        
+        conn.commit()
+        
+    except Exception as e:
+        print(f"Migration error: {e}")
+        # Fallback: create new table structure
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS inventory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                brand TEXT NOT NULL,
+                product_name TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                minimum_individual_quantity INTEGER,
+                current_individual_quantity INTEGER,
+                per_box INTEGER,
+                per_case INTEGER,
+                cost REAL DEFAULT 0.0,
+                last_checked TEXT
+            )
+        ''')
+        conn.commit()
 
-# Add cost column if it doesn't exist (for existing databases)
-try:
-    c.execute('ALTER TABLE inventory ADD COLUMN cost REAL DEFAULT 0.0')
-    conn.commit()
-except sqlite3.OperationalError:
-    # Column already exists
-    pass
-
-conn.commit()
+# Run migration
+migrate_database()
 
 # --- Helper Functions ---
-def add_item(brand, name, pid, min_qty, current_qty, cost, last_checked):
+def add_item(brand, name, pid, min_qty, current_qty, per_box, per_case, cost, last_checked):
+    # Convert 0 or empty values to NULL for per_box and per_case
+    per_box = None if per_box == 0 or per_box is None else per_box
+    per_case = None if per_case == 0 or per_case is None else per_case
+    
     c.execute('''
-        INSERT INTO inventory (brand, product_name, product_id, min_qty, current_qty, cost, last_checked)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (brand, name, pid, min_qty, current_qty, cost, last_checked))
+        INSERT INTO inventory (brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (brand, name, pid, min_qty, current_qty, per_box, per_case, cost, last_checked))
     conn.commit()
 
 def get_inventory(filter_text=None):
     if filter_text:
         c.execute('''
-            SELECT brand, product_name, product_id, min_qty, current_qty, cost, last_checked, id FROM inventory
+            SELECT brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked, id 
+            FROM inventory
             WHERE brand LIKE ? OR product_name LIKE ? OR product_id LIKE ?
             ORDER BY brand, product_name
         ''', (f'%{filter_text}%', f'%{filter_text}%', f'%{filter_text}%'))
     else:
-        c.execute('SELECT brand, product_name, product_id, min_qty, current_qty, cost, last_checked, id FROM inventory ORDER BY brand, product_name')
+        c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked, id FROM inventory ORDER BY brand, product_name')
     return c.fetchall()
 
 def delete_items(ids):
@@ -64,25 +134,29 @@ def delete_items(ids):
         c.execute(f'DELETE FROM inventory WHERE id IN ({placeholders})', ids)
         conn.commit()
 
-def update_item(item_id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked):
+def update_item(item_id, brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked):
+    # Convert 0 or empty values to NULL for per_box and per_case
+    per_box = None if per_box == 0 or per_box is None else per_box
+    per_case = None if per_case == 0 or per_case is None else per_case
+    
     c.execute('''
         UPDATE inventory
-        SET brand = ?, product_name = ?, product_id = ?, min_qty = ?, current_qty = ?, cost = ?, last_checked = ?
+        SET brand = ?, product_name = ?, product_id = ?, minimum_individual_quantity = ?, current_individual_quantity = ?, per_box = ?, per_case = ?, cost = ?, last_checked = ?
         WHERE id = ?
-    ''', (brand, product_name, product_id, min_qty, current_qty, cost, last_checked, item_id))
+    ''', (brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked, item_id))
     conn.commit()
 
 def export_csv():
-    c.execute('SELECT brand, product_name, product_id, min_qty, current_qty, cost, last_checked FROM inventory ORDER BY brand, product_name')
+    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
     rows = c.fetchall()
     df = pd.DataFrame(rows, columns=[
-        'Brand', 'Product Name', 'Product ID', 'Min Qty', 'Current Qty', 'Cost', 'Last Checked'
+        'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Individual Qty', 'Per Box', 'Per Case', 'Cost', 'Last Checked'
     ])
     return df.to_csv(index=False).encode('utf-8')
 
 def export_inventory_html():
     """Generate HTML inventory report"""
-    c.execute('SELECT brand, product_name, product_id, min_qty, current_qty, cost, last_checked FROM inventory ORDER BY brand, product_name')
+    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
     rows = c.fetchall()
     
     if not rows:
@@ -90,7 +164,7 @@ def export_inventory_html():
     
     report_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     total_items = len(rows)
-    total_value = sum(row[4] * row[5] for row in rows)  # current_qty * cost
+    total_value = sum(row[4] * row[7] for row in rows)  # current_individual_quantity * cost
     low_stock_count = sum(1 for row in rows if row[4] <= row[3] and row[3] > 0)
     
     html_content = f"""
@@ -173,7 +247,7 @@ def export_inventory_html():
     </head>
     <body>
         <div class="header">
-            <h1>📦 Inventory Report</h1>
+            <h1>Inventory Report</h1>
             <p>Mom's Inventory Management System</p>
         </div>
         
@@ -202,8 +276,10 @@ def export_inventory_html():
                     <th>Brand</th>
                     <th>Product Name</th>
                     <th>Product ID</th>
-                    <th>Min Qty</th>
-                    <th>Current Qty</th>
+                    <th>Min Individual Qty</th>
+                    <th>Current Individual Qty</th>
+                    <th>Per Box</th>
+                    <th>Per Case</th>
                     <th>Unit Cost</th>
                     <th>Total Value</th>
                     <th>Stock Status</th>
@@ -214,7 +290,7 @@ def export_inventory_html():
     """
     
     for row in rows:
-        brand, product_name, product_id, min_qty, current_qty, cost, last_checked = row
+        brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked = row
         total_item_value = current_qty * cost
         
         # Determine stock status and styling
@@ -228,6 +304,10 @@ def export_inventory_html():
             stock_status = "Good"
             row_class = "good-stock"
         
+        # Handle NULL values for display
+        per_box_display = per_box if per_box is not None else "-"
+        per_case_display = per_case if per_case is not None else "-"
+        
         html_content += f"""
                 <tr class="{row_class}">
                     <td>{brand}</td>
@@ -235,6 +315,8 @@ def export_inventory_html():
                     <td>{product_id}</td>
                     <td>{min_qty}</td>
                     <td>{current_qty}</td>
+                    <td>{per_box_display}</td>
+                    <td>{per_case_display}</td>
                     <td>${cost:.2f}</td>
                     <td>${total_item_value:.2f}</td>
                     <td><strong>{stock_status}</strong></td>
@@ -259,7 +341,7 @@ def export_inventory_html():
 def import_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file)
-        required_columns = ['Brand', 'Product Name', 'Product ID', 'Min Qty', 'Current Qty', 'Cost', 'Last Checked']
+        required_columns = ['Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Individual Qty', 'Cost', 'Last Checked']
         
         if not all(col in df.columns for col in required_columns):
             st.error(f"CSV must contain columns: {', '.join(required_columns)}")
@@ -268,12 +350,20 @@ def import_csv(uploaded_file):
         # Clear existing data and import new
         c.execute('DELETE FROM inventory')
         for _, row in df.iterrows():
+            per_box = row.get('Per Box', None)
+            per_case = row.get('Per Case', None)
+            # Handle NaN values
+            per_box = None if pd.isna(per_box) else int(per_box)
+            per_case = None if pd.isna(per_case) else int(per_case)
+            
             add_item(
                 str(row['Brand']), 
                 str(row['Product Name']), 
                 str(row['Product ID']), 
-                int(row['Min Qty']), 
-                int(row['Current Qty']),
+                int(row['Min Individual Qty']), 
+                int(row['Current Individual Qty']),
+                per_box,
+                per_case,
                 float(row['Cost']) if pd.notna(row['Cost']) else 0.0,
                 str(row['Last Checked'])
             )
@@ -284,7 +374,7 @@ def import_csv(uploaded_file):
         return False
 
 def get_low_stock_items():
-    c.execute('SELECT brand, product_name, product_id, min_qty, current_qty, cost, last_checked, id FROM inventory WHERE current_qty <= min_qty AND min_qty > 0')
+    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked, id FROM inventory WHERE current_individual_quantity <= minimum_individual_quantity AND minimum_individual_quantity > 0')
     return c.fetchall()
 
 # --- Order Form Functions ---
@@ -305,8 +395,9 @@ def add_to_order(item_info, quantity):
         'brand': item_info[0],
         'product_name': item_info[1],
         'product_id': item_info[2],
-        'current_qty': item_info[4],
-        'cost': item_info[5],
+        'current_individual_qty': item_info[4],
+        'per_case': item_info[6],  # per_case is at index 6
+        'cost': item_info[7],
         'quantity': quantity
     }
     st.session_state.current_order.append(order_item)
@@ -401,7 +492,7 @@ def generate_order_html():
     </head>
     <body>
         <div class="header">
-            <h1>📋 Purchase Order</h1>
+            <h1>Purchase Order</h1>
             <p>Mom's Inventory Management System</p>
         </div>
         
@@ -418,8 +509,8 @@ def generate_order_html():
                     <th>Product Name</th>
                     <th>Product ID</th>
                     <th>Current Stock</th>
-                    <th>Quantity Ordered</th>
-                    <th>Unit Cost</th>
+                    <th>Quantity to Order</th>
+                    <th>Unit/Case Cost</th>
                     <th>Total Cost</th>
                 </tr>
             </thead>
@@ -433,7 +524,7 @@ def generate_order_html():
                     <td>{item['brand']}</td>
                     <td>{item['product_name']}</td>
                     <td>{item['product_id']}</td>
-                    <td>{item['current_qty']}</td>
+                    <td>{item['current_individual_qty']}</td>
                     <td>{item['quantity']}</td>
                     <td>${item['cost']:.2f}</td>
                     <td>${item_total:.2f}</td>
@@ -492,17 +583,20 @@ def restore_state_from_history(state_data):
         
         # Restore previous state
         for item in state_data:
-            # Handle both old format (without cost) and new format (with cost)
-            if len(item) == 7:  # Old format without cost
-                brand, product_name, product_id, min_qty, current_qty, last_checked, item_id = item
-                cost = 0.0
-            else:  # New format with cost
+            # Handle different data lengths for backwards compatibility
+            if len(item) == 10:  # New format with all columns
+                brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked, item_id = item
+            elif len(item) == 8:  # Old format without per_box/per_case
                 brand, product_name, product_id, min_qty, current_qty, cost, last_checked, item_id = item
+                per_box, per_case = None, None
+            else:  # Very old format
+                brand, product_name, product_id, min_qty, current_qty, last_checked, item_id = item
+                cost, per_box, per_case = 0.0, None, None
             
             c.execute('''
-                INSERT INTO inventory (id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (item_id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked))
+                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (item_id, brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked))
         
         conn.commit()
         return True
@@ -578,7 +672,7 @@ with st.sidebar:
     st.subheader("📊 Quick Stats")
     total_items = len(get_inventory())
     low_stock = get_low_stock_items()
-    total_value = sum(item[4] * item[5] for item in get_inventory())  # current_qty * cost
+    total_value = sum(item[4] * item[7] for item in get_inventory())  # current_individual_quantity * cost
     
     st.metric("Total Items", total_items)
     st.metric("Low Stock Items", len(low_stock), delta=-len(low_stock) if low_stock else 0)
@@ -591,7 +685,7 @@ with st.sidebar:
     # Export CSV
     csv_data = export_csv()
     st.download_button(
-        "📥 Download CSV", 
+        "Download CSV", 
         data=csv_data, 
         file_name=f"inventory_{datetime.date.today().strftime('%Y%m%d')}.csv", 
         mime='text/csv',
@@ -603,7 +697,7 @@ with st.sidebar:
     html_report = export_inventory_html()
     if html_report:
         st.download_button(
-            "📄 Download HTML Report", 
+            "Download HTML Report", 
             data=html_report, 
             file_name=f"inventory_report_{datetime.date.today().strftime('%Y%m%d')}.html", 
             mime='text/html',
@@ -612,7 +706,7 @@ with st.sidebar:
         )
     
     # Import
-    uploaded_file = st.file_uploader("📤 Upload CSV", type=["csv"])
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     if uploaded_file:
         if import_csv(uploaded_file):
             save_state_to_history()  # Save state after successful import
@@ -625,7 +719,7 @@ with tab1:
         st.warning(f"⚠️ **{len(low_stock)} item(s) are low on stock!**")
         with st.expander("View Low Stock Items"):
             low_stock_df = pd.DataFrame(low_stock, columns=[
-                'Brand', 'Product Name', 'Product ID', 'Min Qty', 'Current Qty', 'Cost', 'Last Checked', '_id'
+                'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Individual Qty', 'Per Box', 'Per Case', 'Cost', 'Last Checked', '_id'
             ])
             # Drop the internal ID column for display
             low_stock_df = low_stock_df.drop(columns=['_id'])
@@ -634,7 +728,7 @@ with tab1:
     # --- Add New Item ---
     col1, col2 = st.columns([3, 1])
     with col2:
-        if st.button("➕ Add New Item", use_container_width=True):
+        if st.button("Add New Item", use_container_width=True):
             st.session_state.show_add_form = not st.session_state.show_add_form
 
     if st.session_state.show_add_form:
@@ -645,12 +739,14 @@ with tab1:
                 with col1:
                     brand = st.text_input("Brand *", placeholder="e.g., Nike, Apple")
                     product_id = st.text_input("Product ID *", placeholder="e.g., SKU123")
-                    current_qty = st.number_input("Current Quantity *", min_value=0, step=1, value=0)
+                    current_qty = st.number_input("Current Individual Quantity *", min_value=0, step=1, value=0)
+                    per_case = st.number_input("Per Case", min_value=0, step=1, value=None, help="Leave empty if not applicable")
                     last_checked = st.date_input("Last Checked", value=datetime.date.today())
                 
                 with col2:
                     product_name = st.text_input("Product Name *", placeholder="e.g., Running Shoes")
-                    min_qty = st.number_input("Minimum Quantity", min_value=0, step=1, value=1)
+                    min_qty = st.number_input("Minimum Individual Quantity", min_value=0, step=1, value=1)
+                    per_box = st.number_input("Per Box", min_value=0, step=1, value=None, help="Leave empty if not applicable")
                     cost = st.number_input("Cost", min_value=0.0, step=0.01, value=0.0, format="%.2f")
                 
                 col_submit, col_cancel = st.columns(2)
@@ -664,7 +760,7 @@ with tab1:
                 if submitted:
                     if brand and product_name and product_id:
                         save_state_to_history()  # Save state before adding
-                        add_item(brand, product_name, product_id, min_qty, current_qty, cost, last_checked.strftime('%Y-%m-%d'))
+                        add_item(brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked.strftime('%Y-%m-%d'))
                         st.success(f"✅ Added '{product_name}' by {brand}")
                         st.session_state.show_add_form = False
                         st.rerun()
@@ -701,19 +797,17 @@ with tab1:
 
     if inventory:
         df = pd.DataFrame(inventory, columns=[
-            'Brand', 'Product Name', 'Product ID', 'Min Qty', 'Current Qty', 'Cost', 'Last Checked', '_id'
+            'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Individual Qty', 'Per Box', 'Per Case', 'Cost', 'Last Checked', '_id'
         ])
         
         # Convert Last Checked to datetime for proper editing
         df['Last Checked'] = pd.to_datetime(df['Last Checked'], errors='coerce').dt.date
-
         
         # Create display dataframe without the internal ID
         display_df = df.drop(columns=['_id'])
         
         # Convert Last Checked to datetime for proper editing
         display_df['Last Checked'] = pd.to_datetime(display_df['Last Checked']).dt.date
-        
         
         edited_df = st.data_editor(
             display_df,
@@ -725,18 +819,20 @@ with tab1:
                 "Brand": st.column_config.TextColumn("Brand", width="medium"),
                 "Product Name": st.column_config.TextColumn("Product Name", width="medium"),
                 "Product ID": st.column_config.TextColumn("Product ID", width="medium"),
-                "Min Qty": st.column_config.NumberColumn("Min Qty", min_value=0, width="small"),
-                "Current Qty": st.column_config.NumberColumn("Current Qty", min_value=0, width="small"),
+                "Min Individual Qty": st.column_config.NumberColumn("Min Individual Qty", min_value=0, width="small"),
+                "Current Individual Qty": st.column_config.NumberColumn("Current Individual Qty", min_value=0, width="small"),
+                "Per Box": st.column_config.NumberColumn("Per Box", min_value=0, width="small"),
+                "Per Case": st.column_config.NumberColumn("Per Case", min_value=0, width="small"),
                 "Cost": st.column_config.NumberColumn("Cost", min_value=0.0, step=0.01, format="$%.2f", width="small"),
                 "Last Checked": st.column_config.DateColumn("Last Checked", width="medium")
             }
         )
         
-        # FIXED SAVE CHANGES LOGIC STARTS HERE
+        # UPDATED SAVE CHANGES LOGIC FOR NEW COLUMNS
         col_save, col_info = st.columns([2, 1])
         
         with col_save:
-            if st.button("💾 Save All Changes", use_container_width=True, type="primary"):
+            if st.button("Save All Changes", use_container_width=True, type="primary"):
                 try:
                     save_state_to_history()  # Save state before changes
                     
@@ -749,8 +845,10 @@ with tab1:
                             'Brand': row['Brand'],
                             'Product Name': row['Product Name'],
                             'Product ID': row['Product ID'],
-                            'Min Qty': row['Min Qty'],
-                            'Current Qty': row['Current Qty'],
+                            'Min Individual Qty': row['Min Individual Qty'],
+                            'Current Individual Qty': row['Current Individual Qty'],
+                            'Per Box': row['Per Box'],
+                            'Per Case': row['Per Case'],
                             'Cost': row['Cost'],
                             'Last Checked': row['Last Checked']
                         }
@@ -768,8 +866,10 @@ with tab1:
                         brand = str(edited_row['Brand']).strip()
                         product_name = str(edited_row['Product Name']).strip()
                         product_id = str(edited_row['Product ID']).strip()
-                        min_qty = int(edited_row['Min Qty']) if pd.notna(edited_row['Min Qty']) else 0
-                        current_qty = int(edited_row['Current Qty']) if pd.notna(edited_row['Current Qty']) else 0
+                        min_qty = int(edited_row['Min Individual Qty']) if pd.notna(edited_row['Min Individual Qty']) else 0
+                        current_qty = int(edited_row['Current Individual Qty']) if pd.notna(edited_row['Current Individual Qty']) else 0
+                        per_box = int(edited_row['Per Box']) if pd.notna(edited_row['Per Box']) and edited_row['Per Box'] > 0 else None
+                        per_case = int(edited_row['Per Case']) if pd.notna(edited_row['Per Case']) and edited_row['Per Case'] > 0 else None
                         cost = float(edited_row['Cost']) if pd.notna(edited_row['Cost']) else 0.0
                         
                         # Handle date conversion
@@ -797,8 +897,10 @@ with tab1:
                                 str(orig_data['Brand']).strip() != brand or
                                 str(orig_data['Product Name']).strip() != product_name or
                                 str(orig_data['Product ID']).strip() != product_id or
-                                int(orig_data['Min Qty']) != min_qty or
-                                int(orig_data['Current Qty']) != current_qty or
+                                int(orig_data['Min Individual Qty']) != min_qty or
+                                int(orig_data['Current Individual Qty']) != current_qty or
+                                orig_data['Per Box'] != per_box or
+                                orig_data['Per Case'] != per_case or
                                 float(orig_data['Cost']) != cost or
                                 str(orig_data['Last Checked']) != last_checked_str
                             )
@@ -811,6 +913,8 @@ with tab1:
                                     product_id,
                                     min_qty,
                                     current_qty,
+                                    per_box,
+                                    per_case,
                                     cost,
                                     last_checked_str
                                 )
@@ -823,6 +927,8 @@ with tab1:
                                 product_id,
                                 min_qty,
                                 current_qty,
+                                per_box,
+                                per_case,
                                 cost,
                                 last_checked_str
                             )
@@ -855,7 +961,7 @@ with tab1:
                         else:
                             st.success("✅ Changes saved successfully!")
                     else:
-                        st.info("ℹ️ No changes detected")
+                        st.info("No changes detected")
                     
                     # Reset any delete confirmation state
                     st.session_state.confirm_delete = False
@@ -904,7 +1010,7 @@ with tab2:
             st.write("### Available Inventory")
             
             # Search/filter for items
-            item_search = st.text_input("🔍 Search items to add to order", placeholder="Search by brand, product name, or ID...")
+            item_search = st.text_input("Search items to add to order", placeholder="Search by brand, product name, or ID...")
             
             # Filter inventory based on search
             filtered_inventory = get_inventory(item_search) if item_search else inventory_items
@@ -912,7 +1018,7 @@ with tab2:
             if filtered_inventory:
                 # Display available items in a more detailed format
                 for item in filtered_inventory:
-                    brand, product_name, product_id, min_qty, current_qty, cost, last_checked, item_id = item
+                    brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked, item_id = item
                     
                     # Create a container for each item
                     with st.container():
@@ -920,7 +1026,11 @@ with tab2:
                         
                         with item_col1:
                             st.write(f"**{brand} - {product_name}**")
-                            st.write(f"ID: {product_id} | Stock: {current_qty} | Cost: ${cost:.2f}")
+                            # Updated details format with Case information
+                            details_parts = [f"ID: {product_id}", f"Stock: {current_qty}", f"Cost: ${cost:.2f}"]
+                            if per_case is not None and per_case > 0:
+                                details_parts.append(f"Case: {per_case}")
+                            st.write(" | ".join(details_parts))
                             
                             # Show stock status
                             if current_qty == 0:
@@ -944,7 +1054,7 @@ with tab2:
                         
                         with item_col3:
                             # Add to order button
-                            if st.button(f"➕ Add", key=f"add_{product_id}", use_container_width=True):
+                            if st.button(f"Add", key=f"add_{product_id}", use_container_width=True):
                                 add_to_order(item, quantity)
                                 st.success(f"Added {quantity} x {product_name}")
                                 st.rerun()
@@ -1007,7 +1117,7 @@ with tab2:
                     order_html = generate_order_html()
                     if order_html:
                         st.download_button(
-                            "📄 Export Order (HTML)",
+                            "Export Order (HTML)",
                             data=order_html,
                             file_name=f"purchase_order_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.html",
                             mime="text/html",
@@ -1016,7 +1126,7 @@ with tab2:
                         )
                 
                 with col_clear:
-                    if st.button("🗑️ Clear All", use_container_width=True):
+                    if st.button("Clear All", use_container_width=True):
                         if st.session_state.get('confirm_clear_order', False):
                             clear_order()
                             st.session_state.confirm_clear_order = False
