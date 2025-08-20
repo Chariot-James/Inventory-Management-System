@@ -1054,8 +1054,8 @@ with tab2:
                             )
                         
                         with item_col3:
-                            # Add to order button
-                            if st.button(f"Add", key=f"add_{product_id}", use_container_width=True):
+                            # Add to order button - use item_id to ensure uniqueness
+                            if st.button(f"Add", key=f"add_{item_id}", use_container_width=True):
                                 add_to_order(item, quantity)
                                 st.success(f"Added {quantity} x {product_name}")
                                 st.rerun()
