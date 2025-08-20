@@ -663,7 +663,7 @@ if 'current_order' not in st.session_state:
     st.session_state.current_order = []
 
 # --- UI ---
-st.title("📦 Mom's Inventory Management System")
+st.title("Mom's Inventory Management System")
 
 # --- Create Tabs ---
 tab1, tab2 = st.tabs(["Inventory Management", "Order Form"])
@@ -686,7 +686,7 @@ with st.sidebar:
     # Export CSV
     csv_data = export_csv()
     st.download_button(
-        "📥 Download CSV", 
+        "Download CSV", 
         data=csv_data, 
         file_name=f"inventory_{datetime.date.today().strftime('%Y%m%d')}.csv", 
         mime='text/csv',
@@ -698,7 +698,7 @@ with st.sidebar:
     html_report = export_inventory_html()
     if html_report:
         st.download_button(
-            "📄 Download HTML Report", 
+            "Download HTML Report", 
             data=html_report, 
             file_name=f"inventory_report_{datetime.date.today().strftime('%Y%m%d')}.html", 
             mime='text/html',
@@ -707,7 +707,7 @@ with st.sidebar:
         )
     
     # Import
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    uploaded_file = st.file_uploader("📤 Upload CSV", type=["csv"])
     if uploaded_file:
         if import_csv(uploaded_file):
             save_state_to_history()  # Save state after successful import
@@ -1042,8 +1042,8 @@ with tab2:
                                 st.success("✅ In Stock")
                         
                         with item_col2:
-                            # Quantity input for this item
-                            qty_key = f"qty_{product_id}"
+                            # Quantity input for this item - use item_id to ensure uniqueness
+                            qty_key = f"qty_{item_id}_{product_id}"
                             quantity = st.number_input(
                                 "Qty", 
                                 min_value=1, 
@@ -1118,7 +1118,7 @@ with tab2:
                     order_html = generate_order_html()
                     if order_html:
                         st.download_button(
-                            "📄 Export Order (HTML)",
+                            "Export Order (HTML)",
                             data=order_html,
                             file_name=f"purchase_order_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.html",
                             mime="text/html",
@@ -1127,7 +1127,7 @@ with tab2:
                         )
                 
                 with col_clear:
-                    if st.button("🗑️ Clear All", use_container_width=True):
+                    if st.button("Clear All", use_container_width=True):
                         if st.session_state.get('confirm_clear_order', False):
                             clear_order()
                             st.session_state.confirm_clear_order = False
@@ -1138,7 +1138,7 @@ with tab2:
                             st.rerun()
                 
                 if st.session_state.get('confirm_clear_order', False):
-                    st.warning("⚠️ Are you sure you want to clear the entire order?")
+                    st.warning("Are you sure you want to clear the entire order?")
                     col_confirm, col_cancel = st.columns(2)
                     with col_confirm:
                         if st.button("✅ Yes, Clear Order"):
