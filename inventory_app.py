@@ -390,14 +390,15 @@ def add_to_order(item_info, quantity):
             st.session_state.current_order[i]['quantity'] += quantity
             return
     
-    # Add new item to order
+    # New column order: brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked, item_id
+    # Indices:           0      1             2           3        4            5        6         7     8             9
     order_item = {
         'brand': item_info[0],
         'product_name': item_info[1],
         'product_id': item_info[2],
-        'current_individual_qty': item_info[4],
+        'current_individual_qty': item_info[4],  # current_individual_quantity at index 4
         'per_case': item_info[6],  # per_case is at index 6
-        'cost': item_info[7],
+        'cost': item_info[7],  # cost is at index 7
         'quantity': quantity
     }
     st.session_state.current_order.append(order_item)
@@ -665,7 +666,7 @@ if 'current_order' not in st.session_state:
 st.title("📦 Mom's Inventory Management System")
 
 # --- Create Tabs ---
-tab1, tab2 = st.tabs(["📦 Inventory Management", "📋 Order Form"])
+tab1, tab2 = st.tabs(["Inventory Management", "Order Form"])
 
 # --- Sidebar (appears on both tabs) ---
 with st.sidebar:
@@ -685,7 +686,7 @@ with st.sidebar:
     # Export CSV
     csv_data = export_csv()
     st.download_button(
-        "Download CSV", 
+        "📥 Download CSV", 
         data=csv_data, 
         file_name=f"inventory_{datetime.date.today().strftime('%Y%m%d')}.csv", 
         mime='text/csv',
@@ -697,7 +698,7 @@ with st.sidebar:
     html_report = export_inventory_html()
     if html_report:
         st.download_button(
-            "Download HTML Report", 
+            "📄 Download HTML Report", 
             data=html_report, 
             file_name=f"inventory_report_{datetime.date.today().strftime('%Y%m%d')}.html", 
             mime='text/html',
@@ -768,7 +769,7 @@ with tab1:
                         st.error("Please fill in all required fields (marked with *)")
 
     # --- Search ---
-    st.subheader("🔍 Search & Manage Inventory")
+    st.subheader("Search & Manage Inventory")
     col_search, col_undo, col_redo = st.columns([3, 1, 1])
 
     with col_search:
@@ -1117,7 +1118,7 @@ with tab2:
                     order_html = generate_order_html()
                     if order_html:
                         st.download_button(
-                            "Export Order (HTML)",
+                            "📄 Export Order (HTML)",
                             data=order_html,
                             file_name=f"purchase_order_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.html",
                             mime="text/html",
@@ -1126,7 +1127,7 @@ with tab2:
                         )
                 
                 with col_clear:
-                    if st.button("Clear All", use_container_width=True):
+                    if st.button("🗑️ Clear All", use_container_width=True):
                         if st.session_state.get('confirm_clear_order', False):
                             clear_order()
                             st.session_state.confirm_clear_order = False
