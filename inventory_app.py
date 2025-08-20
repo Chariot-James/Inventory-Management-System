@@ -367,7 +367,7 @@ def import_csv(uploaded_file):
                 float(row['Cost']) if pd.notna(row['Cost']) else 0.0,
                 str(row['Last Checked'])
             )
-        st.success("✅ Data imported successfully!")
+        st.success("Data imported successfully!")
         return True
     except Exception as e:
         st.error(f"Error importing CSV: {e}")
@@ -707,7 +707,7 @@ with st.sidebar:
         )
     
     # Import
-    uploaded_file = st.file_uploader("📤 Upload CSV", type=["csv"])
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     if uploaded_file:
         if import_csv(uploaded_file):
             save_state_to_history()  # Save state after successful import
@@ -717,7 +717,7 @@ with st.sidebar:
 with tab1:
     # --- Low Stock Alert ---
     if low_stock:
-        st.warning(f"⚠️ **{len(low_stock)} item(s) are low on stock!**")
+        st.warning(f"**{len(low_stock)} item(s) are low on stock!**")
         with st.expander("View Low Stock Items"):
             low_stock_df = pd.DataFrame(low_stock, columns=[
                 'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Individual Qty', 'Per Box', 'Per Case', 'Cost', 'Last Checked', '_id'
@@ -752,9 +752,9 @@ with tab1:
                 
                 col_submit, col_cancel = st.columns(2)
                 with col_submit:
-                    submitted = st.form_submit_button("✅ Add Item", use_container_width=True)
+                    submitted = st.form_submit_button("Add Item", use_container_width=True)
                 with col_cancel:
-                    if st.form_submit_button("❌ Cancel", use_container_width=True):
+                    if st.form_submit_button("Cancel", use_container_width=True):
                         st.session_state.show_add_form = False
                         st.rerun()
                 
@@ -762,7 +762,7 @@ with tab1:
                     if brand and product_name and product_id:
                         save_state_to_history()  # Save state before adding
                         add_item(brand, product_name, product_id, min_qty, current_qty, per_box, per_case, cost, last_checked.strftime('%Y-%m-%d'))
-                        st.success(f"✅ Added '{product_name}' by {brand}")
+                        st.success(f"Added '{product_name}' by {brand}")
                         st.session_state.show_add_form = False
                         st.rerun()
                     else:
@@ -777,21 +777,21 @@ with tab1:
 
     with col_undo:
         can_undo = 'undo_stack' in st.session_state and len(st.session_state.undo_stack) > 0
-        if st.button("↶ Undo", use_container_width=True, disabled=not can_undo):
+        if st.button("Undo", use_container_width=True, disabled=not can_undo):
             if perform_undo():
-                st.success("✅ Undid last operation")
+                st.success("Undid last operation")
                 st.rerun()
             else:
-                st.error("❌ Cannot undo")
+                st.error("Cannot undo")
 
     with col_redo:
         can_redo = 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0
-        if st.button("↷ Redo", use_container_width=True, disabled=not can_redo):
+        if st.button("Redo", use_container_width=True, disabled=not can_redo):
             if perform_redo():
-                st.success("✅ Redid operation")
+                st.success("Redid operation")
                 st.rerun()
             else:
-                st.error("❌ Cannot redo")
+                st.error("Cannot redo")
 
     # --- Inventory Table ---
     inventory = get_inventory(search)
@@ -958,9 +958,9 @@ with tab1:
                             messages.append(f"Updated {updated_count} existing item(s)")
                         
                         if messages:
-                            st.success(f"✅ {' and '.join(messages)}!")
+                            st.success(f"{' and '.join(messages)}!")
                         else:
-                            st.success("✅ Changes saved successfully!")
+                            st.success("Changes saved successfully!")
                     else:
                         st.info("No changes detected")
                     
@@ -971,7 +971,7 @@ with tab1:
                     st.rerun()
                     
                 except Exception as e:
-                    st.error(f"❌ Error saving changes: {str(e)}")
+                    st.error(f"Error saving changes: {str(e)}")
                     st.exception(e)  # This will help debug any remaining issues
         
         with col_info:
@@ -1002,7 +1002,7 @@ with tab2:
     inventory_items = get_inventory()
     
     if not inventory_items:
-        st.warning("⚠️ No inventory items available. Please add items in the Inventory Management tab first.")
+        st.warning("No inventory items available. Please add items in the Inventory Management tab first.")
     else:
         # Create two columns for the order form layout
         col_left, col_right = st.columns([2, 1])
@@ -1035,14 +1035,14 @@ with tab2:
                             
                             # Show stock status
                             if current_qty == 0:
-                                st.error("❌ Out of Stock")
+                                st.error("Out of Stock")
                             elif current_qty <= min_qty and min_qty > 0:
-                                st.warning(f"⚠️ Low Stock (Min: {min_qty})")
+                                st.warning(f"Low Stock (Min: {min_qty})")
                             else:
-                                st.success("✅ In Stock")
+                                st.success("In Stock")
                         
                         with item_col2:
-                            # Quantity input for this item - use item_id to ensure uniqueness
+                            # Quantity input for this item
                             qty_key = f"qty_{item_id}_{product_id}"
                             quantity = st.number_input(
                                 "Qty", 
@@ -1054,7 +1054,7 @@ with tab2:
                             )
                         
                         with item_col3:
-                            # Add to order button - use item_id to ensure uniqueness
+                            # Add to order button
                             if st.button(f"Add", key=f"add_{item_id}", use_container_width=True):
                                 add_to_order(item, quantity)
                                 st.success(f"Added {quantity} x {product_name}")
@@ -1103,7 +1103,7 @@ with tab2:
                             st.write(f"**${new_qty * order_item['cost']:.2f}**")
                         
                         with order_col3:
-                            if st.button("🗑️", key=f"remove_order_{order_item['product_id']}_{i}", help="Remove from order"):
+                            if st.button("Remove", key=f"remove_order_{order_item['product_id']}_{i}", help="Remove from order"):
                                 remove_from_order(order_item['product_id'])
                                 st.rerun()
                         
@@ -1141,12 +1141,12 @@ with tab2:
                     st.warning("Are you sure you want to clear the entire order?")
                     col_confirm, col_cancel = st.columns(2)
                     with col_confirm:
-                        if st.button("✅ Yes, Clear Order"):
+                        if st.button("Yes, Clear Order"):
                             clear_order()
                             st.session_state.confirm_clear_order = False
                             st.rerun()
                     with col_cancel:
-                        if st.button("❌ Cancel"):
+                        if st.button("Cancel"):
                             st.session_state.confirm_clear_order = False
                             st.rerun()
             
@@ -1167,4 +1167,5 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
                 
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
-                st.caption(f"🔄 {len(st.session_state.redo_stack)} action(s) available to redo")
+                st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+                
