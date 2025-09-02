@@ -5,6 +5,7 @@ import json
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import certifi
+import time
 
 # --- Page Configuration (must be first) ---
 st.set_page_config(page_title="Inventory Manager", layout="wide")
@@ -1161,6 +1162,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
