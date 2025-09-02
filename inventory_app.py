@@ -49,7 +49,7 @@ def init_mongodb():
         st.stop()
 
 # Initialize MongoDB collection
- try: 
+try: 
      inventory_collection = init_mongodb()
      if ineventory_collection is not None:
          st.success()
@@ -1157,6 +1157,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
