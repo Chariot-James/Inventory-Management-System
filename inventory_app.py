@@ -51,9 +51,15 @@ def init_mongodb():
 try:
     inventory_collection = init_mongodb()
     if inventory_collection is not None:
-        st.success("Connected to MongoDB Atlas successfully!")
+        msg = st.empty()  # placeholder
+        msg.success("Connected to MongoDB Atlas successfully!")
+        time.sleep(5)
+        msg.empty()  # clears the message
 except:
-    st.error("Database connection failed. Please check your setup.")
+    msg = st.empty()
+    msg.error("Database connection failed. Please check your setup.")
+    time.sleep(5)
+    msg.empty()
     st.stop()
 
 # --- Enhanced Helper Functions ---
@@ -1155,5 +1161,6 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
