@@ -48,9 +48,9 @@ def init_mongodb():
         st.error(f"Database initialization error: {e}")
         st.stop()
 
-# Initialize MongoDB collection
-# try:
-#  inventory_collection = init_mongodb()
+Initialize MongoDB collection
+ try:
+ inventory_collection = init_mongodb()
  #   if inventory_collection is not None:
   #      msg = st.empty()  # placeholder
    #     msg.success("Connected to MongoDB Atlas successfully!")
@@ -1162,6 +1162,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
