@@ -1164,4 +1164,16 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Powered by MongoDB Atlas with automatic daily backups")
+
+# Show undo/redo status in inventory tab only
+if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
+    if ('undo_stack' in st.session_state and len(st.session_state.undo_stack) > 0) or ('redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0):
+        col_status1, col_status2 = st.columns(2)
+        with col_status1:
+            if 'undo_stack' in st.session_state and len(st.session_state.undo_stack) > 0:
+                last_action = st.session_state.undo_stack[-1]
+                
+        with col_status2:
+            if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
+                st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+
