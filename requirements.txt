@@ -1,4 +1,0 @@
-streamlit
-pandas
-pymongo[srv]
-certifi
