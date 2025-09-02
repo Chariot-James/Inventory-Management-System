@@ -54,7 +54,7 @@ try:
     if inventory_collection is not None:
         msg = st.empty()  # placeholder
         msg.success("Connected to MongoDB Atlas successfully!")
-        time.sleep(5)
+        time.sleep(2)
         msg.empty()  # clears the message
 except:
     msg = st.empty()
@@ -1162,6 +1162,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
