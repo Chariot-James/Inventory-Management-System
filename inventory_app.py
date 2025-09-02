@@ -48,7 +48,7 @@ def init_mongodb():
         st.error(f"Database initialization error: {e}")
         st.stop()
 
-Initialize MongoDB collection
+# Initialize MongoDB collection
  try:
  inventory_collection = init_mongodb()
  #   if inventory_collection is not None:
@@ -1162,6 +1162,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
