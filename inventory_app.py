@@ -49,19 +49,20 @@ def init_mongodb():
         st.stop()
 
 # Initialize MongoDB collection
+import streamlit as st
+
+@st.cache_resource
+def get_mongo_connection():
+    return init_mongodb()
+
 try:
-    inventory_collection = init_mongodb()
-    if inventory_collection is not None:
-        msg = st.empty()  # placeholder
-        msg.success("Connected to MongoDB Atlas successfully!")
-        time.sleep(.5)
-        msg.empty()  # clears the message
+    inventory_collection = get_mongo_connection()
+    if inventory_collection is None:
+        st.stop()
 except:
-    msg = st.empty()
-    msg.error("Database connection failed. Please check your setup.")
-    time.sleep(.5)
-    msg.empty()
+    st.error("Database connection failed. Please check your setup.")
     st.stop()
+
 
 # --- Enhanced Helper Functions ---
 def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
@@ -1162,6 +1163,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
