@@ -49,14 +49,19 @@ def init_mongodb():
         st.stop()
 
 # Initialize MongoDB collection
-try: 
-     inventory_collection = init_mongodb()
-     if ineventory_collection is not None:
-         st.success()
-         st.stop
+try:
+    inventory_collection = init_mongodb()
+    if inventory_collection is not None:
+        msg = st.empty()  # placeholder
+        msg.success("Connected to MongoDB Atlas successfully!")
+        time.sleep(.5)
+        msg.empty()  # clears the message
 except:
-     st.error("DB Connection Failed")
-     st.stop()
+    msg = st.empty()
+    msg.error("Database connection failed. Please check your setup.")
+    time.sleep(.5)
+    msg.empty()
+    st.stop()
 
 # --- Enhanced Helper Functions ---
 def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
@@ -1157,11 +1162,6 @@ with tab2:
 
 # Footer
 st.divider()
-
-
-
-
-
 
 
 
