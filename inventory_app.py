@@ -1,5 +1,5 @@
 import streamlit as st
-import psycopg2
+import pg8000
 import pandas as pd
 import datetime
 import json
@@ -1241,3 +1241,4 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+
