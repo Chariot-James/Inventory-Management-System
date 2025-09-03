@@ -1,5 +1,5 @@
 import streamlit as st
-import psycopg2
+import sqlite3
 import pandas as pd
 import datetime
 import json
@@ -10,7 +10,7 @@ st.set_page_config(page_title="Inventory Manager", layout="wide")
 # --- Database setup ---
 @st.cache_resource
 def init_connection():
-    return psycopg2.connect(st.secrets.connections.supabase.url)
+    return sqlite3.connect('inventory.db', check_same_thread=False)
 
 conn = init_connection()
 c = conn.cursor()
@@ -20,28 +20,19 @@ def migrate_database():
     """Migrate database to new schema with renamed columns and new fields"""
     try:
         # Get current table schema
-        c.execute("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = 'inventory' AND table_schema = 'public'
-        """)
+        c.execute("PRAGMA table_info(inventory)")
         columns = c.fetchall()
-        column_names = [col[0] for col in columns] if columns else []
+        column_names = [col[1] for col in columns]
         
-        # Check if table exists
-        c.execute("""
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables 
-                WHERE table_name = 'inventory' AND table_schema = 'public'
-            )
-        """)
-        table_exists = c.fetchone()[0]
+        # Check if we need to migrate (old column names exist)
+        needs_migration = ('min_qty' in column_names or 'current_qty' in column_names or 
+                         'current_individual_quantity' in column_names or 'per_package' not in column_names)
         
-        if not table_exists:
+        if needs_migration:
             # Create new table with updated schema
             c.execute('''
-                CREATE TABLE inventory (
-                    id SERIAL PRIMARY KEY,
+                CREATE TABLE inventory_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     brand TEXT NOT NULL,
                     product_name TEXT NOT NULL,
                     product_id TEXT NOT NULL,
@@ -50,20 +41,42 @@ def migrate_database():
                     per_package INTEGER,
                     per_box INTEGER,
                     per_case INTEGER,
-                    cost DECIMAL(10,2) DEFAULT 0.0,
-                    last_checked DATE
+                    cost REAL DEFAULT 0.0,
+                    last_checked TEXT
                 )
             ''')
-        else:
-            # Check if we need to migrate (old column names exist)
-            needs_migration = ('min_qty' in column_names or 'current_qty' in column_names or 
-                             'current_individual_quantity' in column_names or 'per_package' not in column_names)
             
-            if needs_migration:
-                # Create new table with updated schema
+            # Copy data from old table to new table with column mapping
+            if 'current_individual_quantity' in column_names:
+                # Migrating from intermediate version
                 c.execute('''
-                    CREATE TABLE inventory_new (
-                        id SERIAL PRIMARY KEY,
+                    INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_box, per_case, cost, last_checked)
+                    SELECT id, brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked
+                    FROM inventory
+                ''')
+            elif 'min_qty' in column_names:
+                # Migrating from original version
+                c.execute('''
+                    INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, cost, last_checked)
+                    SELECT id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked
+                    FROM inventory
+                ''')
+            
+            # Replace old table with new one
+            c.execute('DROP TABLE inventory')
+            c.execute('ALTER TABLE inventory_new RENAME TO inventory')
+            
+        else:
+            # Check if we already have the new column names but missing per_package
+            if 'current_amount' in column_names:
+                # Just add missing columns if needed
+                if 'per_package' not in column_names:
+                    c.execute('ALTER TABLE inventory ADD COLUMN per_package INTEGER')
+            else:
+                # Create table with new schema from scratch
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS inventory (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
                         brand TEXT NOT NULL,
                         product_name TEXT NOT NULL,
                         product_id TEXT NOT NULL,
@@ -72,47 +85,19 @@ def migrate_database():
                         per_package INTEGER,
                         per_box INTEGER,
                         per_case INTEGER,
-                        cost DECIMAL(10,2) DEFAULT 0.0,
-                        last_checked DATE
+                        cost REAL DEFAULT 0.0,
+                        last_checked TEXT
                     )
                 ''')
-                
-                # Copy data from old table to new table with column mapping
-                if 'current_individual_quantity' in column_names:
-                    # Migrating from intermediate version
-                    c.execute('''
-                        INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_box, per_case, cost, last_checked)
-                        SELECT id, brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked
-                        FROM inventory
-                    ''')
-                elif 'min_qty' in column_names:
-                    # Migrating from original version
-                    c.execute('''
-                        INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, cost, last_checked)
-                        SELECT id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked
-                        FROM inventory
-                    ''')
-                
-                # Replace old table with new one
-                c.execute('DROP TABLE inventory')
-                c.execute('ALTER TABLE inventory_new RENAME TO inventory')
-                
-            else:
-                # Check if we already have the new column names but missing per_package
-                if 'current_amount' in column_names:
-                    # Just add missing columns if needed
-                    if 'per_package' not in column_names:
-                        c.execute('ALTER TABLE inventory ADD COLUMN per_package INTEGER')
         
         conn.commit()
         
     except Exception as e:
         print(f"Migration error: {e}")
-        conn.rollback()
         # Fallback: create new table structure
         c.execute('''
             CREATE TABLE IF NOT EXISTS inventory (
-                id SERIAL PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 brand TEXT NOT NULL,
                 product_name TEXT NOT NULL,
                 product_id TEXT NOT NULL,
@@ -121,8 +106,8 @@ def migrate_database():
                 per_package INTEGER,
                 per_box INTEGER,
                 per_case INTEGER,
-                cost DECIMAL(10,2) DEFAULT 0.0,
-                last_checked DATE
+                cost REAL DEFAULT 0.0,
+                last_checked TEXT
             )
         ''')
         conn.commit()
@@ -139,7 +124,7 @@ def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, pe
     
     c.execute('''
         INSERT INTO inventory (brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
     conn.commit()
 
@@ -148,7 +133,7 @@ def get_inventory(filter_text=None):
         c.execute('''
             SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id 
             FROM inventory
-            WHERE brand ILIKE %s OR product_name ILIKE %s OR product_id ILIKE %s
+            WHERE brand LIKE ? OR product_name LIKE ? OR product_id LIKE ?
             ORDER BY brand, product_name
         ''', (f'%{filter_text}%', f'%{filter_text}%', f'%{filter_text}%'))
     else:
@@ -157,7 +142,7 @@ def get_inventory(filter_text=None):
 
 def delete_items(ids):
     if ids:
-        placeholders = ','.join(['%s' for _ in ids])
+        placeholders = ','.join(['?' for _ in ids])
         c.execute(f'DELETE FROM inventory WHERE id IN ({placeholders})', ids)
         conn.commit()
 
@@ -169,8 +154,8 @@ def update_item(item_id, brand, product_name, product_id, min_qty, current_amoun
     
     c.execute('''
         UPDATE inventory
-        SET brand = %s, product_name = %s, product_id = %s, minimum_individual_quantity = %s, current_amount = %s, per_package = %s, per_box = %s, per_case = %s, cost = %s, last_checked = %s
-        WHERE id = %s
+        SET brand = ?, product_name = ?, product_id = ?, minimum_individual_quantity = ?, current_amount = ?, per_package = ?, per_box = ?, per_case = ?, cost = ?, last_checked = ?
+        WHERE id = ?
     ''', (brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id))
     conn.commit()
 
@@ -190,16 +175,10 @@ def export_inventory_html():
     if not rows:
         return None
     
-    # Convert to DataFrame for easier processing
-    result = pd.DataFrame(rows, columns=[
-        'brand', 'product_name', 'product_id', 'minimum_individual_quantity', 
-        'current_amount', 'per_package', 'per_box', 'per_case', 'cost', 'last_checked'
-    ])
-    
     report_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    total_items = len(result)
-    total_value = sum(result['current_amount'] * result['cost'])  
-    low_stock_count = sum(1 for _, row in result.iterrows() if row['current_amount'] <= row['minimum_individual_quantity'] and row['minimum_individual_quantity'] > 0)
+    total_items = len(rows)
+    total_value = sum(row[4] * row[8] for row in rows)  # current_amount * cost
+    low_stock_count = sum(1 for row in rows if row[4] <= row[3] and row[3] > 0)
     
     html_content = f"""
     <!DOCTYPE html>
@@ -324,18 +303,8 @@ def export_inventory_html():
             <tbody>
     """
     
-    for _, row in result.iterrows():
-        brand = row['brand']
-        product_name = row['product_name'] 
-        product_id = row['product_id']
-        min_qty = row['minimum_individual_quantity']
-        current_amount = row['current_amount']
-        per_package = row['per_package']
-        per_box = row['per_box']
-        per_case = row['per_case']
-        cost = row['cost']
-        last_checked = row['last_checked']
-        
+    for row in rows:
+        brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked = row
         total_item_value = current_amount * cost
         
         # Determine stock status and styling
@@ -426,39 +395,6 @@ def import_csv(uploaded_file):
 def get_low_stock_items():
     c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory WHERE current_amount <= minimum_individual_quantity AND minimum_individual_quantity > 0')
     return c.fetchall()
-
-def restore_state_from_history(state_data):
-    """Restore database to a previous state"""
-    try:
-        # Clear current inventory
-        c.execute('DELETE FROM inventory')
-        
-        # Restore previous state
-        for item in state_data:
-            # Handle different data lengths for backwards compatibility
-            if len(item) == 11:  # New format with all columns including per_package
-                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
-            elif len(item) == 10:  # Previous format without per_package
-                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
-                per_package = None
-            elif len(item) == 8:  # Old format without per_box/per_case/per_package
-                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
-                per_package, per_box, per_case = None, None, None
-            else:  # Very old format
-                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
-                cost, per_package, per_box, per_case = 0.0, None, None, None
-            
-            c.execute('''
-                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
-        
-        conn.commit()
-        return True
-    except Exception as e:
-        st.error(f"Error restoring state: {e}")
-        conn.rollback()
-        return False
 
 # --- Order Form Functions ---
 def add_to_order(item_info, quantity):
@@ -671,6 +607,38 @@ def save_state_to_history():
     
     # Clear redo stack when new action is performed
     st.session_state.redo_stack.clear()
+
+def restore_state_from_history(state_data):
+    """Restore database to a previous state"""
+    try:
+        # Clear current inventory
+        c.execute('DELETE FROM inventory')
+        
+        # Restore previous state
+        for item in state_data:
+            # Handle different data lengths for backwards compatibility
+            if len(item) == 11:  # New format with all columns including per_package
+                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
+            elif len(item) == 10:  # Previous format without per_package
+                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
+                per_package = None
+            elif len(item) == 8:  # Old format without per_box/per_case/per_package
+                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
+                per_package, per_box, per_case = None, None, None
+            else:  # Very old format
+                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
+                cost, per_package, per_box, per_case = 0.0, None, None, None
+            
+            c.execute('''
+                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error restoring state: {e}")
+        return False
 
 def perform_undo():
     """Undo the last operation"""
@@ -1073,9 +1041,9 @@ with tab2:
     st.subheader("Create Purchase Order")
     
     # Get current inventory for selection
-    inventory_df = get_inventory()
+    inventory_items = get_inventory()
     
-    if inventory_df.empty:
+    if not inventory_items:
         st.warning("No inventory items available. Please add items in the Inventory Management tab first.")
     else:
         # Create two columns for the order form layout
@@ -1088,22 +1056,12 @@ with tab2:
             item_search = st.text_input("Search items to add to order", placeholder="Search by brand, product name, or ID...")
             
             # Filter inventory based on search
-            filtered_inventory_df = get_inventory(item_search) if item_search else inventory_df
+            filtered_inventory = get_inventory(item_search) if item_search else inventory_items
             
-            if not filtered_inventory_df.empty:
+            if filtered_inventory:
                 # Display available items in a more detailed format
-                for _, item in filtered_inventory_df.iterrows():
-                    brand = item['brand']
-                    product_name = item['product_name']
-                    product_id = item['product_id']
-                    min_qty = item['minimum_individual_quantity']
-                    current_amount = item['current_amount']
-                    per_package = item['per_package']
-                    per_box = item['per_box']
-                    per_case = item['per_case']
-                    cost = item['cost']
-                    last_checked = item['last_checked']
-                    item_id = item['id']
+                for item in filtered_inventory:
+                    brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
                     
                     # Create a container for each item
                     with st.container():
@@ -1144,9 +1102,7 @@ with tab2:
                         with item_col3:
                             # Add to order button
                             if st.button(f"Add", key=f"add_{item_id}", use_container_width=True):
-                                # Convert Series to list for compatibility with existing order functions
-                                item_list = [brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id]
-                                add_to_order(item_list, quantity)
+                                add_to_order(item, quantity)
                                 st.success(f"Added {quantity} x {product_name}")
                                 st.rerun()
                         
@@ -1269,4 +1225,3 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
-
