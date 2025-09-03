@@ -10,7 +10,7 @@ st.set_page_config(page_title="Inventory Manager", layout="wide")
 # --- Database setup ---
 @st.cache_resource
 def init_connection():
-    return psycopg2.connect(st.secrets.connections.supabase.url)
+    return psycopg2.connect(st.secrets.database_url)
 
 conn = init_connection()
 c = conn.cursor()
