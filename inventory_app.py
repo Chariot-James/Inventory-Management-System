@@ -54,7 +54,7 @@ try:
      if ineventory_collection is not None:
          st.success()
          st.stop
- except:
+except:
      st.error("DB Connection Failed")
      st.stop()
 
@@ -1157,6 +1157,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
