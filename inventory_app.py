@@ -1,40 +1,29 @@
 import streamlit as st
-import psycopg2
 import pandas as pd
 import datetime
 import json
+from supabase import create_client, Client
 
 # --- Page Configuration (must be first) ---
 st.set_page_config(page_title="Inventory Manager", layout="wide")
 
 # --- Database setup ---
 @st.cache_resource
-def init_connection():
+def init_supabase():
     try:
-        # Try with connection parameters
-        # Try different connection methods
-        try:
-            # Method 1: Direct connection
-            conn = psycopg2.connect(
-                st.secrets.connections.supabase.url,
-                connect_timeout=10,
-                application_name="inventory_app"
-            )
-        except:
-            # Method 2: Alternative connection string format
-            conn = psycopg2.connect(
-                st.secrets.connections.supabase.url.replace("postgresql://", "postgres://"),
-                connect_timeout=10,
-                application_name="inventory_app"
-            )
-        return conn
+        # Initialize Supabase client using API
+        url = st.secrets.supabase.url
+        key = st.secrets.supabase.anon_key
+        return create_client(url, key)
     except Exception as e:
-        st.error(f"Database connection failed: {e}")
-        st.error("Please check your Supabase connection string in Streamlit secrets")
+        st.error(f"Supabase connection failed: {e}")
+        st.error("Please check your Supabase URL and API key in Streamlit secrets")
+        st.error("You need to add these to your secrets:")
+        st.error("- supabase.url")
+        st.error("- supabase.anon_key")
         raise
 
-conn = init_connection()
-c = conn.cursor()
+supabase = init_supabase()
 
 # --- Database Migration Function ---
 def migrate_database():
@@ -158,29 +147,50 @@ def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, pe
     per_box = None if per_box == 0 or per_box is None else per_box
     per_case = None if per_case == 0 or per_case is None else per_case
     
-    c.execute('''
-        INSERT INTO inventory (brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    ''', (brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
-    conn.commit()
+    data = {
+        'brand': brand,
+        'product_name': name,
+        'product_id': pid,
+        'minimum_individual_quantity': min_qty,
+        'current_amount': current_amount,
+        'per_package': per_package,
+        'per_box': per_box,
+        'per_case': per_case,
+        'cost': cost,
+        'last_checked': last_checked
+    }
+    
+    result = supabase.table('inventory').insert(data).execute()
+    return result
 
 def get_inventory(filter_text=None):
     if filter_text:
-        c.execute('''
-            SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id 
-            FROM inventory
-            WHERE brand ILIKE %s OR product_name ILIKE %s OR product_id ILIKE %s
-            ORDER BY brand, product_name
-        ''', (f'%{filter_text}%', f'%{filter_text}%', f'%{filter_text}%'))
+        result = supabase.table('inventory').select('*').or_(f'brand.ilike.%{filter_text}%,product_name.ilike.%{filter_text}%,product_id.ilike.%{filter_text}%').order('brand').order('product_name').execute()
     else:
-        c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory ORDER BY brand, product_name')
-    return c.fetchall()
+        result = supabase.table('inventory').select('*').order('brand').order('product_name').execute()
+    
+    # Convert to list of tuples to match original format
+    data = []
+    for row in result.data:
+        data.append((
+            row['brand'],
+            row['product_name'], 
+            row['product_id'],
+            row['minimum_individual_quantity'],
+            row['current_amount'],
+            row['per_package'],
+            row['per_box'],
+            row['per_case'],
+            row['cost'],
+            row['last_checked'],
+            row['id']
+        ))
+    return data
 
 def delete_items(ids):
     if ids:
-        placeholders = ','.join(['%s' for _ in ids])
-        c.execute(f'DELETE FROM inventory WHERE id IN ({placeholders})', ids)
-        conn.commit()
+        result = supabase.table('inventory').delete().in_('id', ids).execute()
+        return result
 
 def update_item(item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
     # Convert 0 or empty values to NULL for per_package, per_box and per_case
@@ -188,39 +198,44 @@ def update_item(item_id, brand, product_name, product_id, min_qty, current_amoun
     per_box = None if per_box == 0 or per_box is None else per_box
     per_case = None if per_case == 0 or per_case is None else per_case
     
-    c.execute('''
-        UPDATE inventory
-        SET brand = %s, product_name = %s, product_id = %s, minimum_individual_quantity = %s, current_amount = %s, per_package = %s, per_box = %s, per_case = %s, cost = %s, last_checked = %s
-        WHERE id = %s
-    ''', (brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id))
-    conn.commit()
+    data = {
+        'brand': brand,
+        'product_name': product_name,
+        'product_id': product_id,
+        'minimum_individual_quantity': min_qty,
+        'current_amount': current_amount,
+        'per_package': per_package,
+        'per_box': per_box,
+        'per_case': per_case,
+        'cost': cost,
+        'last_checked': last_checked
+    }
+    
+    result = supabase.table('inventory').update(data).eq('id', item_id).execute()
+    return result
 
 def export_csv():
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
-    rows = c.fetchall()
-    df = pd.DataFrame(rows, columns=[
-        'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Amount', 'Per Package', 'Per Box', 'Per Case', 'Cost', 'Last Checked'
-    ])
+    result = supabase.table('inventory').select('brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked').order('brand').order('product_name').execute()
+    
+    df = pd.DataFrame(result.data)
+    # Rename columns to match original format
+    df.columns = ['Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Amount', 'Per Package', 'Per Box', 'Per Case', 'Cost', 'Last Checked']
     return df.to_csv(index=False).encode('utf-8')
 
 def export_inventory_html():
     """Generate HTML inventory report"""
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
-    rows = c.fetchall()
+    result = supabase.table('inventory').select('brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked').order('brand').order('product_name').execute()
     
-    if not rows:
+    if not result.data:
         return None
     
     # Convert to DataFrame for easier processing
-    result = pd.DataFrame(rows, columns=[
-        'brand', 'product_name', 'product_id', 'minimum_individual_quantity', 
-        'current_amount', 'per_package', 'per_box', 'per_case', 'cost', 'last_checked'
-    ])
+    df = pd.DataFrame(result.data)
     
     report_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    total_items = len(result)
-    total_value = sum(result['current_amount'] * result['cost'])  
-    low_stock_count = sum(1 for _, row in result.iterrows() if row['current_amount'] <= row['minimum_individual_quantity'] and row['minimum_individual_quantity'] > 0)
+    total_items = len(df)
+    total_value = sum(df['current_amount'] * df['cost'])  
+    low_stock_count = sum(1 for _, row in df.iterrows() if row['current_amount'] <= row['minimum_individual_quantity'] and row['minimum_individual_quantity'] > 0)
     
     html_content = f"""
     <!DOCTYPE html>
@@ -416,7 +431,7 @@ def import_csv(uploaded_file):
             return False
             
         # Clear existing data and import new
-        c.execute('DELETE FROM inventory')
+        supabase.table('inventory').delete().neq('id', 0).execute()
         for _, row in df.iterrows():
             per_package = row.get('Per Package', None)
             per_box = row.get('Per Box', None)
@@ -445,14 +460,31 @@ def import_csv(uploaded_file):
         return False
 
 def get_low_stock_items():
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory WHERE current_amount <= minimum_individual_quantity AND minimum_individual_quantity > 0')
-    return c.fetchall()
+    result = supabase.table('inventory').select('*').lte('current_amount', 'minimum_individual_quantity').gt('minimum_individual_quantity', 0).execute()
+    
+    # Convert to list of tuples to match original format
+    data = []
+    for row in result.data:
+        data.append((
+            row['brand'],
+            row['product_name'], 
+            row['product_id'],
+            row['minimum_individual_quantity'],
+            row['current_amount'],
+            row['per_package'],
+            row['per_box'],
+            row['per_case'],
+            row['cost'],
+            row['last_checked'],
+            row['id']
+        ))
+    return data
 
 def restore_state_from_history(state_data):
     """Restore database to a previous state"""
     try:
         # Clear current inventory
-        c.execute('DELETE FROM inventory')
+        supabase.table('inventory').delete().neq('id', 0).execute()
         
         # Restore previous state
         for item in state_data:
@@ -469,16 +501,25 @@ def restore_state_from_history(state_data):
                 brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
                 cost, per_package, per_box, per_case = 0.0, None, None, None
             
-            c.execute('''
-                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
+            data = {
+                'id': item_id,
+                'brand': brand,
+                'product_name': product_name,
+                'product_id': product_id,
+                'minimum_individual_quantity': min_qty,
+                'current_amount': current_amount,
+                'per_package': per_package,
+                'per_box': per_box,
+                'per_case': per_case,
+                'cost': cost,
+                'last_checked': last_checked
+            }
+            
+            supabase.table('inventory').insert(data).execute()
         
-        conn.commit()
         return True
     except Exception as e:
         st.error(f"Error restoring state: {e}")
-        conn.rollback()
         return False
 
 # --- Order Form Functions ---
@@ -692,39 +733,6 @@ def save_state_to_history():
     
     # Clear redo stack when new action is performed
     st.session_state.redo_stack.clear()
-
-def restore_state_from_history(state_data):
-    """Restore database to a previous state"""
-    try:
-        # Clear current inventory
-        c.execute('DELETE FROM inventory')
-        
-        # Restore previous state
-        for item in state_data:
-            # Handle different data lengths for backwards compatibility
-            if len(item) == 11:  # New format with all columns including per_package
-                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
-            elif len(item) == 10:  # Previous format without per_package
-                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
-                per_package = None
-            elif len(item) == 8:  # Old format without per_box/per_case/per_package
-                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
-                per_package, per_box, per_case = None, None, None
-            else:  # Very old format
-                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
-                cost, per_package, per_box, per_case = 0.0, None, None, None
-            
-            c.execute('''
-                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
-        
-        conn.commit()
-        return True
-    except Exception as e:
-        st.error(f"Error restoring state: {e}")
-        conn.rollback()
-        return False
 
 def perform_undo():
     """Undo the last operation"""
