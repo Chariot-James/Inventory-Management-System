@@ -1,5 +1,5 @@
 import streamlit as st
-import pg8000
+import psycopg2
 import pandas as pd
 import datetime
 import json
@@ -10,7 +10,7 @@ st.set_page_config(page_title="Inventory Manager", layout="wide")
 # --- Database setup ---
 @st.cache_resource
 def init_connection():
-    return pg8000.connect(st.secrets.connections.supabase.url)
+    return psycopg2.connect(st.secrets.connections.supabase.url)
 
 conn = init_connection()
 c = conn.cursor()
@@ -184,21 +184,275 @@ def export_csv():
 
 def export_inventory_html():
     """Generate HTML inventory report"""
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
-    rows = c.fetchall()
+    result = conn.query('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
     
-    if not rows:
+    if result.empty:
         return None
     
     report_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    total_items = len(rows)
-    total_value = sum(row[4] * row[8] for row in rows)  # current_amount * cost
-    low_stock_count = sum(1 for row in rows if row[4] <= row[3] and row[3] > 0)
+    total_items = len(result)
+    total_value = sum(result['current_amount'] * result['cost'])  
+    low_stock_count = sum(1 for _, row in result.iterrows() if row['current_amount'] <= row['minimum_individual_quantity'] and row['minimum_individual_quantity'] > 0)
     
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
+        <title>Inventory Report</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                margin: 40px;
+                color: #333;
+            }}
+            .header {{
+                text-align: center;
+                border-bottom: 2px solid #333;
+                padding-bottom: 20px;
+                margin-bottom: 30px;
+            }}
+            .summary {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+                margin-bottom: 30px;
+                padding: 20px;
+                background-color: #f8f9fa;
+                border-radius: 8px;
+            }}
+            .summary-item {{
+                text-align: center;
+            }}
+            .summary-value {{
+                font-size: 24px;
+                font-weight: bold;
+                color: #2c3e50;
+            }}
+            .summary-label {{
+                font-size: 14px;
+                color: #666;
+                margin-top: 5px;
+            }}
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 30px;
+            }}
+            th, td {{
+                border: 1px solid #ddd;
+                padding: 12px;
+                text-align: left;
+            }}
+            th {{
+                background-color: #f5f5f5;
+                font-weight: bold;
+            }}
+            .low-stock {{
+                background-color: #fff3cd;
+                color: #856404;
+            }}
+            .out-of-stock {{
+                background-color: #f8d7da;
+                color: #721c24;
+            }}
+            .good-stock {{
+                background-color: #d1edff;
+                color: #0c5460;
+            }}
+            .footer {{
+                margin-top: 50px;
+                border-top: 1px solid #ccc;
+                padding-top: 20px;
+                font-size: 12px;
+                color: #666;
+            }}
+            @media print {{
+                body {{ margin: 20px; }}
+                .no-print {{ display: none; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Inventory Report</h1>
+            <p>Mom's Inventory Management System</p>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <div class="summary-value">{total_items}</div>
+                <div class="summary-label">Total Items</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-value">${total_value:.2f}</div>
+                <div class="summary-label">Total Value</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-value">{low_stock_count}</div>
+                <div class="summary-label">Low Stock Items</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-value">{report_date}</div>
+                <div class="summary-label">Report Generated</div>
+            </div>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Brand</th>
+                    <th>Product Name</th>
+                    <th>Product ID</th>
+                    <th>Min Individual Qty</th>
+                    <th>Current Amount</th>
+                    <th>Per Package</th>
+                    <th>Per Box</th>
+                    <th>Per Case</th>
+                    <th>Unit Cost</th>
+                    <th>Total Value</th>
+                    <th>Stock Status</th>
+                    <th>Last Checked</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    
+    for _, row in result.iterrows():
+        brand = row['brand']
+        product_name = row['product_name'] 
+        product_id = row['product_id']
+        min_qty = row['minimum_individual_quantity']
+        current_amount = row['current_amount']
+        per_package = row['per_package']
+        per_box = row['per_box']
+        per_case = row['per_case']
+        cost = row['cost']
+        last_checked = row['last_checked']
+        
+        total_item_value = current_amount * cost
+        
+        # Determine stock status and styling
+        if current_amount == 0:
+            stock_status = "Out of Stock"
+            row_class = "out-of-stock"
+        elif current_amount <= min_qty and min_qty > 0:
+            stock_status = "Low Stock"
+            row_class = "low-stock"
+        else:
+            stock_status = "Good"
+            row_class = "good-stock"
+        
+        # Handle NULL values for display
+        per_package_display = per_package if per_package is not None else "-"
+        per_box_display = per_box if per_box is not None else "-"
+        per_case_display = per_case if per_case is not None else "-"
+        
+        html_content += f"""
+                <tr class="{row_class}">
+                    <td>{brand}</td>
+                    <td>{product_name}</td>
+                    <td>{product_id}</td>
+                    <td>{min_qty}</td>
+                    <td>{current_amount}</td>
+                    <td>{per_package_display}</td>
+                    <td>{per_box_display}</td>
+                    <td>{per_case_display}</td>
+                    <td>${cost:.2f}</td>
+                    <td>${total_item_value:.2f}</td>
+                    <td><strong>{stock_status}</strong></td>
+                    <td>{last_checked}</td>
+                </tr>
+        """
+    
+    html_content += f"""
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            <p>Generated by Mom's Inventory Management System on {report_date}</p>
+            <p>This report shows the complete inventory status with stock levels and values.</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html_content.encode('utf-8')
+
+def import_csv(uploaded_file):
+    try:
+        df = pd.read_csv(uploaded_file)
+        required_columns = ['Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Amount', 'Cost', 'Last Checked']
+        
+        if not all(col in df.columns for col in required_columns):
+            st.error(f"CSV must contain columns: {', '.join(required_columns)}")
+            return False
+            
+        # Clear existing data and import new
+        conn.execute('DELETE FROM inventory')
+        for _, row in df.iterrows():
+            per_package = row.get('Per Package', None)
+            per_box = row.get('Per Box', None)
+            per_case = row.get('Per Case', None)
+            # Handle NaN values
+            per_package = None if pd.isna(per_package) else int(per_package)
+            per_box = None if pd.isna(per_box) else int(per_box)
+            per_case = None if pd.isna(per_case) else int(per_case)
+            
+            add_item(
+                str(row['Brand']), 
+                str(row['Product Name']), 
+                str(row['Product ID']), 
+                int(row['Min Individual Qty']), 
+                int(row['Current Amount']),
+                per_package,
+                per_box,
+                per_case,
+                float(row['Cost']) if pd.notna(row['Cost']) else 0.0,
+                str(row['Last Checked'])
+            )
+        st.success("Data imported successfully!")
+        return True
+    except Exception as e:
+        st.error(f"Error importing CSV: {e}")
+        return False
+
+def get_low_stock_items():
+    return conn.query('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory WHERE current_amount <= minimum_individual_quantity AND minimum_individual_quantity > 0')
+
+def restore_state_from_history(state_data):
+    """Restore database to a previous state"""
+    try:
+        # Clear current inventory
+        conn.execute('DELETE FROM inventory')
+        
+        # Restore previous state
+        for item in state_data:
+            # Handle different data lengths for backwards compatibility
+            if len(item) == 11:  # New format with all columns including per_package
+                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
+            elif len(item) == 10:  # Previous format without per_package
+                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
+                per_package = None
+            elif len(item) == 8:  # Old format without per_box/per_case/per_package
+                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
+                per_package, per_box, per_case = None, None, None
+            else:  # Very old format
+                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
+                cost, per_package, per_box, per_case = 0.0, None, None, None
+            
+            conn.execute('''
+                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
+                VALUES (%(item_id)s, %(brand)s, %(product_name)s, %(product_id)s, %(min_qty)s, %(current_amount)s, %(per_package)s, %(per_box)s, %(per_case)s, %(cost)s, %(last_checked)s)
+            ''', params={
+                'item_id': item_id, 'brand': brand, 'product_name': product_name, 'product_id': product_id,
+                'min_qty': min_qty, 'current_amount': current_amount, 'per_package': per_package,
+                'per_box': per_box, 'per_case': per_case, 'cost': cost, 'last_checked': last_checked
+            })
+        
+        return True
+    except Exception as e:
+        st.error(f"Error restoring state: {e}")
+        return False<head>
         <title>Inventory Report</title>
         <style>
             body {{
@@ -1057,9 +1311,9 @@ with tab2:
     st.subheader("Create Purchase Order")
     
     # Get current inventory for selection
-    inventory_items = get_inventory()
+    inventory_df = get_inventory()
     
-    if not inventory_items:
+    if inventory_df.empty:
         st.warning("No inventory items available. Please add items in the Inventory Management tab first.")
     else:
         # Create two columns for the order form layout
@@ -1072,12 +1326,22 @@ with tab2:
             item_search = st.text_input("Search items to add to order", placeholder="Search by brand, product name, or ID...")
             
             # Filter inventory based on search
-            filtered_inventory = get_inventory(item_search) if item_search else inventory_items
+            filtered_inventory_df = get_inventory(item_search) if item_search else inventory_df
             
-            if filtered_inventory:
+            if not filtered_inventory_df.empty:
                 # Display available items in a more detailed format
-                for item in filtered_inventory:
-                    brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
+                for _, item in filtered_inventory_df.iterrows():
+                    brand = item['brand']
+                    product_name = item['product_name']
+                    product_id = item['product_id']
+                    min_qty = item['minimum_individual_quantity']
+                    current_amount = item['current_amount']
+                    per_package = item['per_package']
+                    per_box = item['per_box']
+                    per_case = item['per_case']
+                    cost = item['cost']
+                    last_checked = item['last_checked']
+                    item_id = item['id']
                     
                     # Create a container for each item
                     with st.container():
@@ -1118,7 +1382,9 @@ with tab2:
                         with item_col3:
                             # Add to order button
                             if st.button(f"Add", key=f"add_{item_id}", use_container_width=True):
-                                add_to_order(item, quantity)
+                                # Convert Series to list for compatibility with existing order functions
+                                item_list = [brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id]
+                                add_to_order(item_list, quantity)
                                 st.success(f"Added {quantity} x {product_name}")
                                 st.rerun()
                         
@@ -1241,5 +1507,3 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
-
-
