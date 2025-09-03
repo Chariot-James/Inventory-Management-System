@@ -10,7 +10,28 @@ st.set_page_config(page_title="Inventory Manager", layout="wide")
 # --- Database setup ---
 @st.cache_resource
 def init_connection():
-    return psycopg2.connect(st.secrets.connections.supabase.url)
+    try:
+        # Try with connection parameters
+        # Try different connection methods
+        try:
+            # Method 1: Direct connection
+            conn = psycopg2.connect(
+                st.secrets.connections.supabase.url,
+                connect_timeout=10,
+                application_name="inventory_app"
+            )
+        except:
+            # Method 2: Alternative connection string format
+            conn = psycopg2.connect(
+                st.secrets.connections.supabase.url.replace("postgresql://", "postgres://"),
+                connect_timeout=10,
+                application_name="inventory_app"
+            )
+        return conn
+    except Exception as e:
+        st.error(f"Database connection failed: {e}")
+        st.error("Please check your Supabase connection string in Streamlit secrets")
+        raise
 
 conn = init_connection()
 c = conn.cursor()
