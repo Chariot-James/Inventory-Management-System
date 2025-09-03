@@ -26,8 +26,35 @@ def init_supabase():
 supabase = init_supabase()
 
 # --- Database Setup Complete ---
-# Note: With Supabase API, table creation and migration is handled through the Supabase dashboard
-# The inventory table should already exist in your Supabase project
+def create_inventory_table():
+    """Create the inventory table if it doesn't exist"""
+    try:
+        # Try to access the table to see if it exists
+        supabase.table('inventory').select('id').limit(1).execute()
+        st.success("✅ Inventory table exists and is accessible")
+        return True
+    except Exception as e:
+        st.error("❌ Inventory table does not exist or is not accessible")
+        st.error("Please create the table in your Supabase dashboard:")
+        st.code("""
+CREATE TABLE inventory (
+    id SERIAL PRIMARY KEY,
+    brand TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    minimum_individual_quantity INTEGER,
+    current_amount INTEGER,
+    per_package INTEGER,
+    per_box INTEGER,
+    per_case INTEGER,
+    cost DECIMAL(10,2) DEFAULT 0.0,
+    last_checked DATE
+);
+        """)
+        return False
+
+# Check if table exists
+create_inventory_table()
 
 # --- Helper Functions ---
 def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
@@ -53,28 +80,33 @@ def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, pe
     return result
 
 def get_inventory(filter_text=None):
-    if filter_text:
-        result = supabase.table('inventory').select('*').or_(f'brand.ilike.%{filter_text}%,product_name.ilike.%{filter_text}%,product_id.ilike.%{filter_text}%').order('brand').order('product_name').execute()
-    else:
-        result = supabase.table('inventory').select('*').order('brand').order('product_name').execute()
-    
-    # Convert to list of tuples to match original format
-    data = []
-    for row in result.data:
-        data.append((
-            row['brand'],
-            row['product_name'], 
-            row['product_id'],
-            row['minimum_individual_quantity'],
-            row['current_amount'],
-            row['per_package'],
-            row['per_box'],
-            row['per_case'],
-            row['cost'],
-            row['last_checked'],
-            row['id']
-        ))
-    return data
+    try:
+        if filter_text:
+            result = supabase.table('inventory').select('*').or_(f'brand.ilike.%{filter_text}%,product_name.ilike.%{filter_text}%,product_id.ilike.%{filter_text}%').order('brand').order('product_name').execute()
+        else:
+            result = supabase.table('inventory').select('*').order('brand').order('product_name').execute()
+        
+        # Convert to list of tuples to match original format
+        data = []
+        for row in result.data:
+            data.append((
+                row['brand'],
+                row['product_name'], 
+                row['product_id'],
+                row['minimum_individual_quantity'],
+                row['current_amount'],
+                row['per_package'],
+                row['per_box'],
+                row['per_case'],
+                row['cost'],
+                row['last_checked'],
+                row['id']
+            ))
+        return data
+    except Exception as e:
+        st.error(f"Error accessing inventory table: {e}")
+        st.error("The inventory table may not exist. Please create it in your Supabase dashboard.")
+        return []
 
 def delete_items(ids):
     if ids:
