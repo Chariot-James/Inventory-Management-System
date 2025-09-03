@@ -455,11 +455,11 @@ def restore_state_from_history(state_data):
         return False<head>
         <title>Inventory Report</title>
         <style>
-            body {{
+            body {
                 font-family: Arial, sans-serif;
                 margin: 40px;
                 color: #333;
-            }}
+            }
             .header {{
                 text-align: center;
                 border-bottom: 2px solid #333;
@@ -1507,3 +1507,4 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+
