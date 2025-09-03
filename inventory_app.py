@@ -1050,11 +1050,13 @@ with tab2:
                             )
                         
                         with item_col3:
-                            # Add to order button
-                            if st.button(f"Add", key=f"add_{item_id}", width="stretch"):
-                                add_to_order(item, quantity)
-                                st.success(f"Added {quantity} x {product_name}")
-                                st.rerun()
+                            if st.button(f"Add", key=f"add_{item_id}", use_container_width=True):
+                                # Add the item to session_state instead of rerun
+                                st.session_state["order"].append({
+                                    "item": item,
+                                    "quantity": quantity,
+                                    "product_name": product_name
+                                })
                         
                         st.divider()
             else:
@@ -1163,6 +1165,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
