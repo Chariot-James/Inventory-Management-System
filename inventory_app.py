@@ -10,7 +10,7 @@ st.set_page_config(page_title="Inventory Manager", layout="wide")
 # --- Database setup ---
 @st.cache_resource
 def init_connection():
-    return psycopg2.connect(st.secrets.connections.supabase.url)
+    return pg8000.connect(st.secrets.connections.supabase.url)
 
 conn = init_connection()
 c = conn.cursor()
@@ -1241,4 +1241,5 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+
 
