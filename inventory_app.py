@@ -1048,7 +1048,10 @@ with tab2:
                                 key=qty_key,
                                 label_visibility="collapsed"
                             )
-                        
+                        # Make sure orders are tracked in session_state
+                        if "order" not in st.session_state:
+                            st.session_state["order"] = []
+    
                         with item_col3:
                             if st.button(f"Add", key=f"add_{item_id}", use_container_width=True):
                                 # Add the item to session_state instead of rerun
@@ -1165,6 +1168,7 @@ with tab2:
 
 # Footer
 st.divider()
+
 
 
 
