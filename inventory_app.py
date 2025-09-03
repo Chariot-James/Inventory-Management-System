@@ -105,7 +105,9 @@ def get_inventory(filter_text=None):
         return data
     except Exception as e:
         st.error(f"Error accessing inventory table: {e}")
-        st.error("The inventory table may not exist. Please create it in your Supabase dashboard.")
+        st.error("The inventory table may not exist or have different column names.")
+        st.error("Please check your Supabase dashboard → Table Editor")
+        st.info("💡 Run `streamlit run check_data.py` to diagnose the issue")
         return []
 
 def delete_items(ids):
