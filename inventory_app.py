@@ -1177,7 +1177,7 @@ with tab2:
                         )
                 
                 with col_clear:
-                    if st.button("Clear All", use_container_width=True):
+                    if st.button("Clear All", width="stretch"):
                         if st.session_state.get('confirm_clear_order', False):
                             clear_order()
                             st.session_state.confirm_clear_order = False
@@ -1219,5 +1219,3 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
                 
-
-
