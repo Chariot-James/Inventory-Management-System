@@ -1310,9 +1310,8 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
                 last_action = st.session_state.undo_stack[-1]
                 
         with col_status2:
-            if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
-                st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available"):
-        st.session_state.redo_stack = []
+    if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
+        st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
     
     # Add current state to undo stack
     st.session_state.undo_stack.append(current_state)
@@ -1386,4 +1385,5 @@ def perform_undo():
     }
     
     if 'redo_stack' not in st.session_
+
 
