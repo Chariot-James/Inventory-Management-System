@@ -8,12 +8,6 @@ from bson import ObjectId
 # --- Page Configuration (must be first) ---
 st.set_page_config(page_title="Inventory Manager", layout="wide")
 
-# --- MongoDB Configuration ---
-# Replace this with your actual MongoDB connection string
-MONGODB_URI = st.secrets.get("MONGODB_URI", "mongodb://localhost:27017/")
-DATABASE_NAME = "inventory_db"
-COLLECTION_NAME = "inventory"
-
 @st.cache_resource
 def init_mongodb_connection():
     """Initialize MongoDB connection"""
@@ -1386,3 +1380,4 @@ if st.session_state.get('selected_tab', 0) == 0:
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+
