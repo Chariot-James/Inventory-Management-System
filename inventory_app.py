@@ -1,360 +1,444 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import datetime
 import json
+from pymongo import MongoClient
+from bson import ObjectId
 
 # --- Page Configuration (must be first) ---
 st.set_page_config(page_title="Inventory Manager", layout="wide")
 
-# --- Database setup ---
-@st.cache_resource
-def init_connection():
-    return sqlite3.connect('inventory.db', check_same_thread=False)
+# --- MongoDB Configuration ---
+# Replace this with your actual MongoDB connection string
+MONGODB_URI = st.secrets.get("MONGODB_URI", "mongodb://localhost:27017/")
+DATABASE_NAME = "inventory_db"
+COLLECTION_NAME = "inventory"
 
-conn = init_connection()
-c = conn.cursor()
+@st.cache_resource
+def init_mongodb_connection():
+    """Initialize MongoDB connection"""
+    try:
+        client = MongoClient(MONGODB_URI)
+        # Test the connection
+        client.admin.command('ping')
+        db = client[DATABASE_NAME]
+        collection = db[COLLECTION_NAME]
+        
+        # Create indexes for better performance
+        collection.create_index("product_id", unique=True)
+        collection.create_index([("brand", 1), ("product_name", 1)])
+        
+        return collection
+    except Exception as e:
+        st.error(f"Failed to connect to MongoDB: {e}")
+        return None
+
+# Initialize MongoDB connection
+inventory_collection = init_mongodb_connection()
 
 # --- Database Migration Function ---
 def migrate_database():
-    """Migrate database to new schema with renamed columns and new fields"""
+    """Migrate any existing data structure - MongoDB is schema-less so this is minimal"""
+    if inventory_collection is None:
+        st.error("MongoDB connection not available")
+        return
+    
     try:
-        # Get current table schema
-        c.execute("PRAGMA table_info(inventory)")
-        columns = c.fetchall()
-        column_names = [col[1] for col in columns]
-        
-        # Check if we need to migrate (old column names exist)
-        needs_migration = ('min_qty' in column_names or 'current_qty' in column_names or 
-                         'current_individual_quantity' in column_names or 'per_package' not in column_names)
-        
-        if needs_migration:
-            # Create new table with updated schema
-            c.execute('''
-                CREATE TABLE inventory_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    brand TEXT NOT NULL,
-                    product_name TEXT NOT NULL,
-                    product_id TEXT NOT NULL,
-                    minimum_individual_quantity INTEGER,
-                    current_amount INTEGER,
-                    per_package INTEGER,
-                    per_box INTEGER,
-                    per_case INTEGER,
-                    cost REAL DEFAULT 0.0,
-                    last_checked TEXT
-                )
-            ''')
-            
-            # Copy data from old table to new table with column mapping
-            if 'current_individual_quantity' in column_names:
-                # Migrating from intermediate version
-                c.execute('''
-                    INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_box, per_case, cost, last_checked)
-                    SELECT id, brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked
-                    FROM inventory
-                ''')
-            elif 'min_qty' in column_names:
-                # Migrating from original version
-                c.execute('''
-                    INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, cost, last_checked)
-                    SELECT id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked
-                    FROM inventory
-                ''')
-            
-            # Replace old table with new one
-            c.execute('DROP TABLE inventory')
-            c.execute('ALTER TABLE inventory_new RENAME TO inventory')
-            
-        else:
-            # Check if we already have the new column names but missing per_package
-            if 'current_amount' in column_names:
-                # Just add missing columns if needed
-                if 'per_package' not in column_names:
-                    c.execute('ALTER TABLE inventory ADD COLUMN per_package INTEGER')
-            else:
-                # Create table with new schema from scratch
-                c.execute('''
-                    CREATE TABLE IF NOT EXISTS inventory (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        brand TEXT NOT NULL,
-                        product_name TEXT NOT NULL,
-                        product_id TEXT NOT NULL,
-                        minimum_individual_quantity INTEGER,
-                        current_amount INTEGER,
-                        per_package INTEGER,
-                        per_box INTEGER,
-                        per_case INTEGER,
-                        cost REAL DEFAULT 0.0,
-                        last_checked TEXT
-                    )
-                ''')
-        
-        conn.commit()
-        
+        # Check if we have any documents and ensure they have required fields
+        sample_doc = inventory_collection.find_one()
+        if sample_doc:
+            # Add any missing fields to existing documents
+            inventory_collection.update_many(
+                {"per_package": {"$exists": False}},
+                {"$set": {"per_package": None}}
+            )
+            inventory_collection.update_many(
+                {"per_box": {"$exists": False}},
+                {"$set": {"per_box": None}}
+            )
+            inventory_collection.update_many(
+                {"per_case": {"$exists": False}},
+                {"$set": {"per_case": None}}
+            )
+            inventory_collection.update_many(
+                {"cost": {"$exists": False}},
+                {"$set": {"cost": 0.0}}
+            )
     except Exception as e:
         print(f"Migration error: {e}")
-        # Fallback: create new table structure
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS inventory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                brand TEXT NOT NULL,
-                product_name TEXT NOT NULL,
-                product_id TEXT NOT NULL,
-                minimum_individual_quantity INTEGER,
-                current_amount INTEGER,
-                per_package INTEGER,
-                per_box INTEGER,
-                per_case INTEGER,
-                cost REAL DEFAULT 0.0,
-                last_checked TEXT
-            )
-        ''')
-        conn.commit()
 
 # Run migration
 migrate_database()
 
 # --- Helper Functions ---
 def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
-    # Convert 0 or empty values to NULL for per_package, per_box and per_case
-    per_package = None if per_package == 0 or per_package is None else per_package
-    per_box = None if per_box == 0 or per_box is None else per_box
-    per_case = None if per_case == 0 or per_case is None else per_case
+    """Add item to MongoDB"""
+    if inventory_collection is None:
+        return False
     
-    c.execute('''
-        INSERT INTO inventory (brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
-    conn.commit()
+    try:
+        # Convert 0 or empty values to None for per_package, per_box and per_case
+        per_package = None if per_package == 0 or per_package is None else per_package
+        per_box = None if per_box == 0 or per_box is None else per_box
+        per_case = None if per_case == 0 or per_case is None else per_case
+        
+        document = {
+            "brand": brand,
+            "product_name": name,
+            "product_id": pid,
+            "minimum_individual_quantity": min_qty,
+            "current_amount": current_amount,
+            "per_package": per_package,
+            "per_box": per_box,
+            "per_case": per_case,
+            "cost": cost,
+            "last_checked": last_checked,
+            "created_at": datetime.datetime.now(),
+            "updated_at": datetime.datetime.now()
+        }
+        
+        inventory_collection.insert_one(document)
+        return True
+    except Exception as e:
+        st.error(f"Error adding item: {e}")
+        return False
 
 def get_inventory(filter_text=None):
-    if filter_text:
-        c.execute('''
-            SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id 
-            FROM inventory
-            WHERE brand LIKE ? OR product_name LIKE ? OR product_id LIKE ?
-            ORDER BY brand, product_name
-        ''', (f'%{filter_text}%', f'%{filter_text}%', f'%{filter_text}%'))
-    else:
-        c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory ORDER BY brand, product_name')
-    return c.fetchall()
+    """Get inventory from MongoDB"""
+    if inventory_collection is None:
+        return []
+    
+    try:
+        if filter_text:
+            # MongoDB regex search (case insensitive)
+            regex_filter = {"$regex": filter_text, "$options": "i"}
+            query = {
+                "$or": [
+                    {"brand": regex_filter},
+                    {"product_name": regex_filter},
+                    {"product_id": regex_filter}
+                ]
+            }
+            cursor = inventory_collection.find(query).sort([("brand", 1), ("product_name", 1)])
+        else:
+            cursor = inventory_collection.find().sort([("brand", 1), ("product_name", 1)])
+        
+        # Convert MongoDB documents to the expected format
+        results = []
+        for doc in cursor:
+            result_row = [
+                doc.get("brand", ""),
+                doc.get("product_name", ""),
+                doc.get("product_id", ""),
+                doc.get("minimum_individual_quantity", 0),
+                doc.get("current_amount", 0),
+                doc.get("per_package"),
+                doc.get("per_box"),
+                doc.get("per_case"),
+                doc.get("cost", 0.0),
+                doc.get("last_checked", ""),
+                str(doc["_id"])  # MongoDB ObjectId as string
+            ]
+            results.append(result_row)
+        
+        return results
+    except Exception as e:
+        st.error(f"Error retrieving inventory: {e}")
+        return []
 
 def delete_items(ids):
-    if ids:
-        placeholders = ','.join(['?' for _ in ids])
-        c.execute(f'DELETE FROM inventory WHERE id IN ({placeholders})', ids)
-        conn.commit()
+    """Delete items from MongoDB"""
+    if inventory_collection is None or not ids:
+        return False
+    
+    try:
+        # Convert string IDs back to ObjectIds
+        object_ids = [ObjectId(id_str) for id_str in ids if ObjectId.is_valid(id_str)]
+        if object_ids:
+            inventory_collection.delete_many({"_id": {"$in": object_ids}})
+        return True
+    except Exception as e:
+        st.error(f"Error deleting items: {e}")
+        return False
 
 def update_item(item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
-    # Convert 0 or empty values to NULL for per_package, per_box and per_case
-    per_package = None if per_package == 0 or per_package is None else per_package
-    per_box = None if per_box == 0 or per_box is None else per_box
-    per_case = None if per_case == 0 or per_case is None else per_case
+    """Update item in MongoDB"""
+    if inventory_collection is None:
+        return False
     
-    c.execute('''
-        UPDATE inventory
-        SET brand = ?, product_name = ?, product_id = ?, minimum_individual_quantity = ?, current_amount = ?, per_package = ?, per_box = ?, per_case = ?, cost = ?, last_checked = ?
-        WHERE id = ?
-    ''', (brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id))
-    conn.commit()
+    try:
+        # Convert 0 or empty values to None for per_package, per_box and per_case
+        per_package = None if per_package == 0 or per_package is None else per_package
+        per_box = None if per_box == 0 or per_box is None else per_box
+        per_case = None if per_case == 0 or per_case is None else per_case
+        
+        update_doc = {
+            "$set": {
+                "brand": brand,
+                "product_name": product_name,
+                "product_id": product_id,
+                "minimum_individual_quantity": min_qty,
+                "current_amount": current_amount,
+                "per_package": per_package,
+                "per_box": per_box,
+                "per_case": per_case,
+                "cost": cost,
+                "last_checked": last_checked,
+                "updated_at": datetime.datetime.now()
+            }
+        }
+        
+        if ObjectId.is_valid(item_id):
+            inventory_collection.update_one({"_id": ObjectId(item_id)}, update_doc)
+        return True
+    except Exception as e:
+        st.error(f"Error updating item: {e}")
+        return False
 
 def export_csv():
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
-    rows = c.fetchall()
-    df = pd.DataFrame(rows, columns=[
-        'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Amount', 'Per Package', 'Per Box', 'Per Case', 'Cost', 'Last Checked'
-    ])
-    return df.to_csv(index=False).encode('utf-8')
+    """Export inventory to CSV"""
+    if inventory_collection is None:
+        return b""
+    
+    try:
+        cursor = inventory_collection.find().sort([("brand", 1), ("product_name", 1)])
+        rows = []
+        for doc in cursor:
+            row = [
+                doc.get("brand", ""),
+                doc.get("product_name", ""),
+                doc.get("product_id", ""),
+                doc.get("minimum_individual_quantity", 0),
+                doc.get("current_amount", 0),
+                doc.get("per_package"),
+                doc.get("per_box"),
+                doc.get("per_case"),
+                doc.get("cost", 0.0),
+                doc.get("last_checked", "")
+            ]
+            rows.append(row)
+        
+        df = pd.DataFrame(rows, columns=[
+            'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Amount', 'Per Package', 'Per Box', 'Per Case', 'Cost', 'Last Checked'
+        ])
+        return df.to_csv(index=False).encode('utf-8')
+    except Exception as e:
+        st.error(f"Error exporting CSV: {e}")
+        return b""
 
 def export_inventory_html():
     """Generate HTML inventory report"""
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
-    rows = c.fetchall()
-    
-    if not rows:
+    if inventory_collection is None:
         return None
     
-    report_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    total_items = len(rows)
-    total_value = sum(row[4] * row[8] for row in rows)  # current_amount * cost
-    low_stock_count = sum(1 for row in rows if row[4] <= row[3] and row[3] > 0)
-    
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Inventory Report</title>
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                margin: 40px;
-                color: #333;
-            }}
-            .header {{
-                text-align: center;
-                border-bottom: 2px solid #333;
-                padding-bottom: 20px;
-                margin-bottom: 30px;
-            }}
-            .summary {{
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 20px;
-                margin-bottom: 30px;
-                padding: 20px;
-                background-color: #f8f9fa;
-                border-radius: 8px;
-            }}
-            .summary-item {{
-                text-align: center;
-            }}
-            .summary-value {{
-                font-size: 24px;
-                font-weight: bold;
-                color: #2c3e50;
-            }}
-            .summary-label {{
-                font-size: 14px;
-                color: #666;
-                margin-top: 5px;
-            }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin-bottom: 30px;
-            }}
-            th, td {{
-                border: 1px solid #ddd;
-                padding: 12px;
-                text-align: left;
-            }}
-            th {{
-                background-color: #f5f5f5;
-                font-weight: bold;
-            }}
-            .low-stock {{
-                background-color: #fff3cd;
-                color: #856404;
-            }}
-            .out-of-stock {{
-                background-color: #f8d7da;
-                color: #721c24;
-            }}
-            .good-stock {{
-                background-color: #d1edff;
-                color: #0c5460;
-            }}
-            .footer {{
-                margin-top: 50px;
-                border-top: 1px solid #ccc;
-                padding-top: 20px;
-                font-size: 12px;
-                color: #666;
-            }}
-            @media print {{
-                body {{ margin: 20px; }}
-                .no-print {{ display: none; }}
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>Inventory Report</h1>
-            <p>Mom's Inventory Management System</p>
-        </div>
+    try:
+        cursor = inventory_collection.find().sort([("brand", 1), ("product_name", 1)])
+        rows = []
+        for doc in cursor:
+            row = [
+                doc.get("brand", ""),
+                doc.get("product_name", ""),
+                doc.get("product_id", ""),
+                doc.get("minimum_individual_quantity", 0),
+                doc.get("current_amount", 0),
+                doc.get("per_package"),
+                doc.get("per_box"),
+                doc.get("per_case"),
+                doc.get("cost", 0.0),
+                doc.get("last_checked", "")
+            ]
+            rows.append(row)
         
-        <div class="summary">
-            <div class="summary-item">
-                <div class="summary-value">{total_items}</div>
-                <div class="summary-label">Total Items</div>
-            </div>
-            <div class="summary-item">
-                <div class="summary-value">${total_value:.2f}</div>
-                <div class="summary-label">Total Value</div>
-            </div>
-            <div class="summary-item">
-                <div class="summary-value">{low_stock_count}</div>
-                <div class="summary-label">Low Stock Items</div>
-            </div>
-            <div class="summary-item">
-                <div class="summary-value">{report_date}</div>
-                <div class="summary-label">Report Generated</div>
-            </div>
-        </div>
+        if not rows:
+            return None
         
-        <table>
-            <thead>
-                <tr>
-                    <th>Brand</th>
-                    <th>Product Name</th>
-                    <th>Product ID</th>
-                    <th>Min Individual Qty</th>
-                    <th>Current Amount</th>
-                    <th>Per Package</th>
-                    <th>Per Box</th>
-                    <th>Per Case</th>
-                    <th>Unit Cost</th>
-                    <th>Total Value</th>
-                    <th>Stock Status</th>
-                    <th>Last Checked</th>
-                </tr>
-            </thead>
-            <tbody>
-    """
-    
-    for row in rows:
-        brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked = row
-        total_item_value = current_amount * cost
+        report_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        total_items = len(rows)
+        total_value = sum(row[4] * row[8] for row in rows)  # current_amount * cost
+        low_stock_count = sum(1 for row in rows if row[4] <= row[3] and row[3] > 0)
         
-        # Determine stock status and styling
-        if current_amount == 0:
-            stock_status = "Out of Stock"
-            row_class = "out-of-stock"
-        elif current_amount <= min_qty and min_qty > 0:
-            stock_status = "Low Stock"
-            row_class = "low-stock"
-        else:
-            stock_status = "Good"
-            row_class = "good-stock"
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Inventory Report</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 40px;
+                    color: #333;
+                }}
+                .header {{
+                    text-align: center;
+                    border-bottom: 2px solid #333;
+                    padding-bottom: 20px;
+                    margin-bottom: 30px;
+                }}
+                .summary {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                    gap: 20px;
+                    margin-bottom: 30px;
+                    padding: 20px;
+                    background-color: #f8f9fa;
+                    border-radius: 8px;
+                }}
+                .summary-item {{
+                    text-align: center;
+                }}
+                .summary-value {{
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                }}
+                .summary-label {{
+                    font-size: 14px;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-bottom: 30px;
+                }}
+                th, td {{
+                    border: 1px solid #ddd;
+                    padding: 12px;
+                    text-align: left;
+                }}
+                th {{
+                    background-color: #f5f5f5;
+                    font-weight: bold;
+                }}
+                .low-stock {{
+                    background-color: #fff3cd;
+                    color: #856404;
+                }}
+                .out-of-stock {{
+                    background-color: #f8d7da;
+                    color: #721c24;
+                }}
+                .good-stock {{
+                    background-color: #d1edff;
+                    color: #0c5460;
+                }}
+                .footer {{
+                    margin-top: 50px;
+                    border-top: 1px solid #ccc;
+                    padding-top: 20px;
+                    font-size: 12px;
+                    color: #666;
+                }}
+                @media print {{
+                    body {{ margin: 20px; }}
+                    .no-print {{ display: none; }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>Inventory Report</h1>
+                <p>Mom's Inventory Management System</p>
+            </div>
+            
+            <div class="summary">
+                <div class="summary-item">
+                    <div class="summary-value">{total_items}</div>
+                    <div class="summary-label">Total Items</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value">${total_value:.2f}</div>
+                    <div class="summary-label">Total Value</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value">{low_stock_count}</div>
+                    <div class="summary-label">Low Stock Items</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value">{report_date}</div>
+                    <div class="summary-label">Report Generated</div>
+                </div>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Brand</th>
+                        <th>Product Name</th>
+                        <th>Product ID</th>
+                        <th>Min Individual Qty</th>
+                        <th>Current Amount</th>
+                        <th>Per Package</th>
+                        <th>Per Box</th>
+                        <th>Per Case</th>
+                        <th>Unit Cost</th>
+                        <th>Total Value</th>
+                        <th>Stock Status</th>
+                        <th>Last Checked</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
         
-        # Handle NULL values for display
-        per_package_display = per_package if per_package is not None else "-"
-        per_box_display = per_box if per_box is not None else "-"
-        per_case_display = per_case if per_case is not None else "-"
+        for row in rows:
+            brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked = row
+            total_item_value = current_amount * cost
+            
+            # Determine stock status and styling
+            if current_amount == 0:
+                stock_status = "Out of Stock"
+                row_class = "out-of-stock"
+            elif current_amount <= min_qty and min_qty > 0:
+                stock_status = "Low Stock"
+                row_class = "low-stock"
+            else:
+                stock_status = "Good"
+                row_class = "good-stock"
+            
+            # Handle None values for display
+            per_package_display = per_package if per_package is not None else "-"
+            per_box_display = per_box if per_box is not None else "-"
+            per_case_display = per_case if per_case is not None else "-"
+            
+            html_content += f"""
+                    <tr class="{row_class}">
+                        <td>{brand}</td>
+                        <td>{product_name}</td>
+                        <td>{product_id}</td>
+                        <td>{min_qty}</td>
+                        <td>{current_amount}</td>
+                        <td>{per_package_display}</td>
+                        <td>{per_box_display}</td>
+                        <td>{per_case_display}</td>
+                        <td>${cost:.2f}</td>
+                        <td>${total_item_value:.2f}</td>
+                        <td><strong>{stock_status}</strong></td>
+                        <td>{last_checked}</td>
+                    </tr>
+            """
         
         html_content += f"""
-                <tr class="{row_class}">
-                    <td>{brand}</td>
-                    <td>{product_name}</td>
-                    <td>{product_id}</td>
-                    <td>{min_qty}</td>
-                    <td>{current_amount}</td>
-                    <td>{per_package_display}</td>
-                    <td>{per_box_display}</td>
-                    <td>{per_case_display}</td>
-                    <td>${cost:.2f}</td>
-                    <td>${total_item_value:.2f}</td>
-                    <td><strong>{stock_status}</strong></td>
-                    <td>{last_checked}</td>
-                </tr>
+                </tbody>
+            </table>
+            
+            <div class="footer">
+                <p>Generated by Mom's Inventory Management System on {report_date}</p>
+                <p>This report shows the complete inventory status with stock levels and values.</p>
+            </div>
+        </body>
+        </html>
         """
-    
-    html_content += f"""
-            </tbody>
-        </table>
         
-        <div class="footer">
-            <p>Generated by Mom's Inventory Management System on {report_date}</p>
-            <p>This report shows the complete inventory status with stock levels and values.</p>
-        </div>
-    </body>
-    </html>
-    """
-    
-    return html_content.encode('utf-8')
+        return html_content.encode('utf-8')
+    except Exception as e:
+        st.error(f"Error generating HTML report: {e}")
+        return None
 
 def import_csv(uploaded_file):
+    """Import CSV to MongoDB"""
+    if inventory_collection is None:
+        return False
+    
     try:
         df = pd.read_csv(uploaded_file)
         required_columns = ['Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Amount', 'Cost', 'Last Checked']
@@ -364,7 +448,9 @@ def import_csv(uploaded_file):
             return False
             
         # Clear existing data and import new
-        c.execute('DELETE FROM inventory')
+        inventory_collection.delete_many({})
+        
+        documents = []
         for _, row in df.iterrows():
             per_package = row.get('Per Package', None)
             per_box = row.get('Per Box', None)
@@ -374,18 +460,25 @@ def import_csv(uploaded_file):
             per_box = None if pd.isna(per_box) else int(per_box)
             per_case = None if pd.isna(per_case) else int(per_case)
             
-            add_item(
-                str(row['Brand']), 
-                str(row['Product Name']), 
-                str(row['Product ID']), 
-                int(row['Min Individual Qty']), 
-                int(row['Current Amount']),
-                per_package,
-                per_box,
-                per_case,
-                float(row['Cost']) if pd.notna(row['Cost']) else 0.0,
-                str(row['Last Checked'])
-            )
+            document = {
+                "brand": str(row['Brand']),
+                "product_name": str(row['Product Name']),
+                "product_id": str(row['Product ID']),
+                "minimum_individual_quantity": int(row['Min Individual Qty']),
+                "current_amount": int(row['Current Amount']),
+                "per_package": per_package,
+                "per_box": per_box,
+                "per_case": per_case,
+                "cost": float(row['Cost']) if pd.notna(row['Cost']) else 0.0,
+                "last_checked": str(row['Last Checked']),
+                "created_at": datetime.datetime.now(),
+                "updated_at": datetime.datetime.now()
+            }
+            documents.append(document)
+        
+        if documents:
+            inventory_collection.insert_many(documents)
+        
         st.success("Data imported successfully!")
         return True
     except Exception as e:
@@ -393,8 +486,50 @@ def import_csv(uploaded_file):
         return False
 
 def get_low_stock_items():
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory WHERE current_amount <= minimum_individual_quantity AND minimum_individual_quantity > 0')
-    return c.fetchall()
+    """Get low stock items from MongoDB"""
+    if inventory_collection is None:
+        return []
+    
+    try:
+        # MongoDB aggregation to find low stock items
+        pipeline = [
+            {
+                "$match": {
+                    "$expr": {
+                        "$and": [
+                            {"$gt": ["$minimum_individual_quantity", 0]},
+                            {"$lte": ["$current_amount", "$minimum_individual_quantity"]}
+                        ]
+                    }
+                }
+            },
+            {
+                "$sort": {"brand": 1, "product_name": 1}
+            }
+        ]
+        
+        cursor = inventory_collection.aggregate(pipeline)
+        results = []
+        for doc in cursor:
+            result_row = [
+                doc.get("brand", ""),
+                doc.get("product_name", ""),
+                doc.get("product_id", ""),
+                doc.get("minimum_individual_quantity", 0),
+                doc.get("current_amount", 0),
+                doc.get("per_package"),
+                doc.get("per_box"),
+                doc.get("per_case"),
+                doc.get("cost", 0.0),
+                doc.get("last_checked", ""),
+                str(doc["_id"])
+            ]
+            results.append(result_row)
+        
+        return results
+    except Exception as e:
+        st.error(f"Error retrieving low stock items: {e}")
+        return []
 
 # --- Order Form Functions ---
 def add_to_order(item_info, quantity):
@@ -544,7 +679,7 @@ def generate_order_html():
     
     for item in st.session_state.current_order:
         item_total = item['quantity'] * item['cost']
-        # Handle NULL values for display
+        # Handle None values for display
         per_package_display = item['per_package'] if item['per_package'] is not None else "-"
         per_box_display = item['per_box'] if item['per_box'] is not None else "-"
         per_case_display = item['per_case'] if item['per_case'] is not None else "-"
@@ -598,63 +733,6 @@ def save_state_to_history():
     if 'redo_stack' not in st.session_state:
         st.session_state.redo_stack = []
     
-    # Add current state to undo stack
-    st.session_state.undo_stack.append(current_state)
-    
-    # Keep only last 10 states to manage memory
-    if len(st.session_state.undo_stack) > 10:
-        st.session_state.undo_stack.pop(0)
-    
-    # Clear redo stack when new action is performed
-    st.session_state.redo_stack.clear()
-
-def restore_state_from_history(state_data):
-    """Restore database to a previous state"""
-    try:
-        # Clear current inventory
-        c.execute('DELETE FROM inventory')
-        
-        # Restore previous state
-        for item in state_data:
-            # Handle different data lengths for backwards compatibility
-            if len(item) == 11:  # New format with all columns including per_package
-                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
-            elif len(item) == 10:  # Previous format without per_package
-                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
-                per_package = None
-            elif len(item) == 8:  # Old format without per_box/per_case/per_package
-                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
-                per_package, per_box, per_case = None, None, None
-            else:  # Very old format
-                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
-                cost, per_package, per_box, per_case = 0.0, None, None, None
-            
-            c.execute('''
-                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
-        
-        conn.commit()
-        return True
-    except Exception as e:
-        st.error(f"Error restoring state: {e}")
-        return False
-
-def perform_undo():
-    """Undo the last operation"""
-    if 'undo_stack' not in st.session_state or not st.session_state.undo_stack:
-        return False
-    
-    # Save current state to redo stack before undoing
-    current_state = {
-        'data': get_inventory(),
-        'timestamp': datetime.datetime.now(),
-        'action': 'current'
-    }
-    
-    if 'redo_stack' not in st.session_state:
-        st.session_state.redo_stack = []
-    
     st.session_state.redo_stack.append(current_state)
     
     # Get the last state and restore it
@@ -700,6 +778,13 @@ if 'current_order' not in st.session_state:
 # --- UI ---
 st.title("Mom's Inventory Management System")
 
+# Check MongoDB connection status
+if inventory_collection is None:
+    st.error("❌ MongoDB connection failed. Please check your connection settings.")
+    st.stop()
+else:
+    st.success("✅ Connected to MongoDB")
+
 # --- Create Tabs ---
 tab1, tab2 = st.tabs(["Inventory Management", "Order Form"])
 
@@ -720,14 +805,15 @@ with st.sidebar:
     
     # Export CSV
     csv_data = export_csv()
-    st.download_button(
-        "Download CSV", 
-        data=csv_data, 
-        file_name=f"inventory_{datetime.date.today().strftime('%Y%m%d')}.csv", 
-        mime='text/csv',
-        use_container_width=True,
-        help="Download inventory data as spreadsheet"
-    )
+    if csv_data:
+        st.download_button(
+            "Download CSV", 
+            data=csv_data, 
+            file_name=f"inventory_{datetime.date.today().strftime('%Y%m%d')}.csv", 
+            mime='text/csv',
+            use_container_width=True,
+            help="Download inventory data as spreadsheet"
+        )
     
     # Export HTML Report
     html_report = export_inventory_html()
@@ -797,10 +883,12 @@ with tab1:
                 if submitted:
                     if brand and product_name and product_id:
                         save_state_to_history()  # Save state before adding
-                        add_item(brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked.strftime('%Y-%m-%d'))
-                        st.success(f"Added '{product_name}' by {brand}")
-                        st.session_state.show_add_form = False
-                        st.rerun()
+                        if add_item(brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked.strftime('%Y-%m-%d')):
+                            st.success(f"Added '{product_name}' by {brand}")
+                            st.session_state.show_add_form = False
+                            st.rerun()
+                        else:
+                            st.error("Failed to add item")
                     else:
                         st.error("Please fill in all required fields (marked with *)")
 
@@ -947,7 +1035,7 @@ with tab1:
                             )
                             
                             if needs_update:
-                                update_item(
+                                if update_item(
                                     matching_id,
                                     brand,
                                     product_name, 
@@ -959,11 +1047,11 @@ with tab1:
                                     per_case,
                                     cost,
                                     last_checked_str
-                                )
-                                changes_made = True
+                                ):
+                                    changes_made = True
                         else:
                             # This is a new item
-                            add_item(
+                            if add_item(
                                 brand,
                                 product_name,
                                 product_id,
@@ -974,8 +1062,8 @@ with tab1:
                                 per_case,
                                 cost,
                                 last_checked_str
-                            )
-                            changes_made = True
+                            ):
+                                changes_made = True
                     
                     # Handle deleted items (original items not found in edited data)
                     deleted_ids = []
@@ -984,8 +1072,8 @@ with tab1:
                             deleted_ids.append(orig_id)
                     
                     if deleted_ids:
-                        delete_items(deleted_ids)
-                        changes_made = True
+                        if delete_items(deleted_ids):
+                            changes_made = True
                     
                     # Provide appropriate success message
                     if changes_made:
@@ -1014,7 +1102,6 @@ with tab1:
                     
                 except Exception as e:
                     st.error(f"Error saving changes: {str(e)}")
-                    st.exception(e)  # This will help debug any remaining issues
         
         with col_info:
             # Show what changes will be made (simplified version)
@@ -1224,4 +1311,78 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
                 
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
-                st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+                st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")state:
+        st.session_state.redo_stack = []
+    
+    # Add current state to undo stack
+    st.session_state.undo_stack.append(current_state)
+    
+    # Keep only last 10 states to manage memory
+    if len(st.session_state.undo_stack) > 10:
+        st.session_state.undo_stack.pop(0)
+    
+    # Clear redo stack when new action is performed
+    st.session_state.redo_stack.clear()
+
+def restore_state_from_history(state_data):
+    """Restore database to a previous state"""
+    if inventory_collection is None:
+        return False
+    
+    try:
+        # Clear current inventory
+        inventory_collection.delete_many({})
+        
+        # Restore previous state
+        documents = []
+        for item in state_data:
+            # Handle different data lengths for backwards compatibility
+            if len(item) == 11:  # New format with all columns including per_package
+                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
+            elif len(item) == 10:  # Previous format without per_package
+                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
+                per_package = None
+            elif len(item) == 8:  # Old format without per_box/per_case/per_package
+                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
+                per_package, per_box, per_case = None, None, None
+            else:  # Very old format
+                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
+                cost, per_package, per_box, per_case = 0.0, None, None, None
+            
+            document = {
+                "brand": brand,
+                "product_name": product_name,
+                "product_id": product_id,
+                "minimum_individual_quantity": min_qty,
+                "current_amount": current_amount,
+                "per_package": per_package,
+                "per_box": per_box,
+                "per_case": per_case,
+                "cost": cost,
+                "last_checked": last_checked,
+                "created_at": datetime.datetime.now(),
+                "updated_at": datetime.datetime.now()
+            }
+            documents.append(document)
+        
+        if documents:
+            inventory_collection.insert_many(documents)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error restoring state: {e}")
+        return False
+
+def perform_undo():
+    """Undo the last operation"""
+    if 'undo_stack' not in st.session_state or not st.session_state.undo_stack:
+        return False
+    
+    # Save current state to redo stack before undoing
+    current_state = {
+        'data': get_inventory(),
+        'timestamp': datetime.datetime.now(),
+        'action': 'current'
+    }
+    
+    if 'redo_stack' not in st.session_
