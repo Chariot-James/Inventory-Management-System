@@ -1,8 +1,9 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import datetime
 import json
+from pymongo import MongoClient
+from bson.objectid import ObjectId
 
 # --- Page Configuration (must be first) ---
 st.set_page_config(page_title="Inventory Manager", layout="wide")
@@ -10,158 +11,108 @@ st.set_page_config(page_title="Inventory Manager", layout="wide")
 # --- Database setup ---
 @st.cache_resource
 def init_connection():
-    return sqlite3.connect('inventory.db', check_same_thread=False)
+    connection_string = st.secrets.connections.mongodb.connection_string
+    client = MongoClient(connection_string)
+    db = client.inventory_db
+    return db.inventory_collection
 
-conn = init_connection()
-c = conn.cursor()
-
-# --- Database Migration Function ---
-def migrate_database():
-    """Migrate database to new schema with renamed columns and new fields"""
-    try:
-        # Get current table schema
-        c.execute("PRAGMA table_info(inventory)")
-        columns = c.fetchall()
-        column_names = [col[1] for col in columns]
-        
-        # Check if we need to migrate (old column names exist)
-        needs_migration = ('min_qty' in column_names or 'current_qty' in column_names or 
-                         'current_individual_quantity' in column_names or 'per_package' not in column_names)
-        
-        if needs_migration:
-            # Create new table with updated schema
-            c.execute('''
-                CREATE TABLE inventory_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    brand TEXT NOT NULL,
-                    product_name TEXT NOT NULL,
-                    product_id TEXT NOT NULL,
-                    minimum_individual_quantity INTEGER,
-                    current_amount INTEGER,
-                    per_package INTEGER,
-                    per_box INTEGER,
-                    per_case INTEGER,
-                    cost REAL DEFAULT 0.0,
-                    last_checked TEXT
-                )
-            ''')
-            
-            # Copy data from old table to new table with column mapping
-            if 'current_individual_quantity' in column_names:
-                # Migrating from intermediate version
-                c.execute('''
-                    INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_box, per_case, cost, last_checked)
-                    SELECT id, brand, product_name, product_id, minimum_individual_quantity, current_individual_quantity, per_box, per_case, cost, last_checked
-                    FROM inventory
-                ''')
-            elif 'min_qty' in column_names:
-                # Migrating from original version
-                c.execute('''
-                    INSERT INTO inventory_new (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, cost, last_checked)
-                    SELECT id, brand, product_name, product_id, min_qty, current_qty, cost, last_checked
-                    FROM inventory
-                ''')
-            
-            # Replace old table with new one
-            c.execute('DROP TABLE inventory')
-            c.execute('ALTER TABLE inventory_new RENAME TO inventory')
-            
-        else:
-            # Check if we already have the new column names but missing per_package
-            if 'current_amount' in column_names:
-                # Just add missing columns if needed
-                if 'per_package' not in column_names:
-                    c.execute('ALTER TABLE inventory ADD COLUMN per_package INTEGER')
-            else:
-                # Create table with new schema from scratch
-                c.execute('''
-                    CREATE TABLE IF NOT EXISTS inventory (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        brand TEXT NOT NULL,
-                        product_name TEXT NOT NULL,
-                        product_id TEXT NOT NULL,
-                        minimum_individual_quantity INTEGER,
-                        current_amount INTEGER,
-                        per_package INTEGER,
-                        per_box INTEGER,
-                        per_case INTEGER,
-                        cost REAL DEFAULT 0.0,
-                        last_checked TEXT
-                    )
-                ''')
-        
-        conn.commit()
-        
-    except Exception as e:
-        print(f"Migration error: {e}")
-        # Fallback: create new table structure
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS inventory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                brand TEXT NOT NULL,
-                product_name TEXT NOT NULL,
-                product_id TEXT NOT NULL,
-                minimum_individual_quantity INTEGER,
-                current_amount INTEGER,
-                per_package INTEGER,
-                per_box INTEGER,
-                per_case INTEGER,
-                cost REAL DEFAULT 0.0,
-                last_checked TEXT
-            )
-        ''')
-        conn.commit()
-
-# Run migration
-migrate_database()
+collection = init_connection()
 
 # --- Helper Functions ---
 def add_item(brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
-    # Convert 0 or empty values to NULL for per_package, per_box and per_case
+    # Convert 0 or empty values to None for per_package, per_box and per_case
     per_package = None if per_package == 0 or per_package is None else per_package
     per_box = None if per_box == 0 or per_box is None else per_box
     per_case = None if per_case == 0 or per_case is None else per_case
     
-    c.execute('''
-        INSERT INTO inventory (brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (brand, name, pid, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
-    conn.commit()
+    document = {
+        'brand': brand,
+        'product_name': name,
+        'product_id': pid,
+        'minimum_individual_quantity': min_qty,
+        'current_amount': current_amount,
+        'per_package': per_package,
+        'per_box': per_box,
+        'per_case': per_case,
+        'cost': cost,
+        'last_checked': last_checked
+    }
+    collection.insert_one(document)
 
 def get_inventory(filter_text=None):
     if filter_text:
-        c.execute('''
-            SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id 
-            FROM inventory
-            WHERE brand LIKE ? OR product_name LIKE ? OR product_id LIKE ?
-            ORDER BY brand, product_name
-        ''', (f'%{filter_text}%', f'%{filter_text}%', f'%{filter_text}%'))
+        query = {
+            '$or': [
+                {'brand': {'$regex': filter_text, '$options': 'i'}},
+                {'product_name': {'$regex': filter_text, '$options': 'i'}},
+                {'product_id': {'$regex': filter_text, '$options': 'i'}}
+            ]
+        }
+        cursor = collection.find(query).sort([('brand', 1), ('product_name', 1)])
     else:
-        c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory ORDER BY brand, product_name')
-    return c.fetchall()
+        cursor = collection.find().sort([('brand', 1), ('product_name', 1)])
+    
+    # Convert to list format matching original SQLite structure
+    results = []
+    for doc in cursor:
+        results.append([
+            doc['brand'],
+            doc['product_name'],
+            doc['product_id'],
+            doc['minimum_individual_quantity'],
+            doc['current_amount'],
+            doc['per_package'],
+            doc['per_box'],
+            doc['per_case'],
+            doc['cost'],
+            doc['last_checked'],
+            str(doc['_id'])  # Convert ObjectId to string
+        ])
+    return results
 
 def delete_items(ids):
     if ids:
-        placeholders = ','.join(['?' for _ in ids])
-        c.execute(f'DELETE FROM inventory WHERE id IN ({placeholders})', ids)
-        conn.commit()
+        # Convert string IDs back to ObjectIds
+        object_ids = [ObjectId(id_str) for id_str in ids]
+        collection.delete_many({'_id': {'$in': object_ids}})
 
 def update_item(item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked):
-    # Convert 0 or empty values to NULL for per_package, per_box and per_case
+    # Convert 0 or empty values to None for per_package, per_box and per_case
     per_package = None if per_package == 0 or per_package is None else per_package
     per_box = None if per_box == 0 or per_box is None else per_box
     per_case = None if per_case == 0 or per_case is None else per_case
     
-    c.execute('''
-        UPDATE inventory
-        SET brand = ?, product_name = ?, product_id = ?, minimum_individual_quantity = ?, current_amount = ?, per_package = ?, per_box = ?, per_case = ?, cost = ?, last_checked = ?
-        WHERE id = ?
-    ''', (brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id))
-    conn.commit()
+    update_doc = {
+        'brand': brand,
+        'product_name': product_name,
+        'product_id': product_id,
+        'minimum_individual_quantity': min_qty,
+        'current_amount': current_amount,
+        'per_package': per_package,
+        'per_box': per_box,
+        'per_case': per_case,
+        'cost': cost,
+        'last_checked': last_checked
+    }
+    collection.update_one({'_id': ObjectId(item_id)}, {'$set': update_doc})
 
 def export_csv():
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
-    rows = c.fetchall()
+    cursor = collection.find().sort([('brand', 1), ('product_name', 1)])
+    rows = []
+    for doc in cursor:
+        rows.append([
+            doc['brand'],
+            doc['product_name'],
+            doc['product_id'],
+            doc['minimum_individual_quantity'],
+            doc['current_amount'],
+            doc['per_package'],
+            doc['per_box'],
+            doc['per_case'],
+            doc['cost'],
+            doc['last_checked']
+        ])
+    
     df = pd.DataFrame(rows, columns=[
         'Brand', 'Product Name', 'Product ID', 'Min Individual Qty', 'Current Amount', 'Per Package', 'Per Box', 'Per Case', 'Cost', 'Last Checked'
     ])
@@ -169,8 +120,21 @@ def export_csv():
 
 def export_inventory_html():
     """Generate HTML inventory report"""
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked FROM inventory ORDER BY brand, product_name')
-    rows = c.fetchall()
+    cursor = collection.find().sort([('brand', 1), ('product_name', 1)])
+    rows = []
+    for doc in cursor:
+        rows.append([
+            doc['brand'],
+            doc['product_name'],
+            doc['product_id'],
+            doc['minimum_individual_quantity'],
+            doc['current_amount'],
+            doc['per_package'],
+            doc['per_box'],
+            doc['per_case'],
+            doc['cost'],
+            doc['last_checked']
+        ])
     
     if not rows:
         return None
@@ -364,7 +328,7 @@ def import_csv(uploaded_file):
             return False
             
         # Clear existing data and import new
-        c.execute('DELETE FROM inventory')
+        collection.delete_many({})
         for _, row in df.iterrows():
             per_package = row.get('Per Package', None)
             per_box = row.get('Per Box', None)
@@ -393,8 +357,29 @@ def import_csv(uploaded_file):
         return False
 
 def get_low_stock_items():
-    c.execute('SELECT brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked, id FROM inventory WHERE current_amount <= minimum_individual_quantity AND minimum_individual_quantity > 0')
-    return c.fetchall()
+    cursor = collection.find({
+        '$and': [
+            {'$expr': {'$lte': ['$current_amount', '$minimum_individual_quantity']}},
+            {'minimum_individual_quantity': {'$gt': 0}}
+        ]
+    })
+    
+    results = []
+    for doc in cursor:
+        results.append([
+            doc['brand'],
+            doc['product_name'],
+            doc['product_id'],
+            doc['minimum_individual_quantity'],
+            doc['current_amount'],
+            doc['per_package'],
+            doc['per_box'],
+            doc['per_case'],
+            doc['cost'],
+            doc['last_checked'],
+            str(doc['_id'])
+        ])
+    return results
 
 # --- Order Form Functions ---
 def add_to_order(item_info, quantity):
@@ -612,7 +597,7 @@ def restore_state_from_history(state_data):
     """Restore database to a previous state"""
     try:
         # Clear current inventory
-        c.execute('DELETE FROM inventory')
+        collection.delete_many({})
         
         # Restore previous state
         for item in state_data:
@@ -629,12 +614,20 @@ def restore_state_from_history(state_data):
                 brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
                 cost, per_package, per_box, per_case = 0.0, None, None, None
             
-            c.execute('''
-                INSERT INTO inventory (id, brand, product_name, product_id, minimum_individual_quantity, current_amount, per_package, per_box, per_case, cost, last_checked)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (item_id, brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked))
+            document = {
+                'brand': brand,
+                'product_name': product_name,
+                'product_id': product_id,
+                'minimum_individual_quantity': min_qty,
+                'current_amount': current_amount,
+                'per_package': per_package,
+                'per_box': per_box,
+                'per_case': per_case,
+                'cost': cost,
+                'last_checked': last_checked
+            }
+            collection.insert_one(document)
         
-        conn.commit()
         return True
     except Exception as e:
         st.error(f"Error restoring state: {e}")
@@ -866,7 +859,7 @@ with tab1:
             }
         )
         
-        # UPDATED SAVE CHANGES LOGIC FOR NEW COLUMNS
+        # UPDATED SAVE CHANGES LOGIC FOR MONGODB
         col_save, col_info = st.columns([2, 1])
         
         with col_save:
@@ -1225,3 +1218,4 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
+                
