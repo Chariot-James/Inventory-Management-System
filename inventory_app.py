@@ -254,7 +254,7 @@ def export_inventory_html():
         
         report_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         total_items = len(rows)
-        total_value = sum(row[4] * row[8] for row in rows)  # current_amount * cost
+        total_value = sum(row[4] * row[8] for row in rows)
         low_stock_count = sum(1 for row in rows if row[4] <= row[3] and row[3] > 0)
         
         html_content = f"""
@@ -730,6 +730,80 @@ def save_state_to_history():
     # Initialize undo/redo stacks if they don't exist
     if 'undo_stack' not in st.session_state:
         st.session_state.undo_stack = []
+    if 'redo_stack' not in st.session_state:
+        st.session_state.redo_stack = []
+    
+    # Add current state to undo stack
+    st.session_state.undo_stack.append(current_state)
+    
+    # Keep only last 10 states to manage memory
+    if len(st.session_state.undo_stack) > 10:
+        st.session_state.undo_stack.pop(0)
+    
+    # Clear redo stack when new action is performed
+    st.session_state.redo_stack.clear()
+
+def restore_state_from_history(state_data):
+    """Restore database to a previous state"""
+    if inventory_collection is None:
+        return False
+    
+    try:
+        # Clear current inventory
+        inventory_collection.delete_many({})
+        
+        # Restore previous state
+        documents = []
+        for item in state_data:
+            # Handle different data lengths for backwards compatibility
+            if len(item) == 11:  # New format with all columns including per_package
+                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
+            elif len(item) == 10:  # Previous format without per_package
+                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
+                per_package = None
+            elif len(item) == 8:  # Old format without per_box/per_case/per_package
+                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
+                per_package, per_box, per_case = None, None, None
+            else:  # Very old format
+                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
+                cost, per_package, per_box, per_case = 0.0, None, None, None
+            
+            document = {
+                "brand": brand,
+                "product_name": product_name,
+                "product_id": product_id,
+                "minimum_individual_quantity": min_qty,
+                "current_amount": current_amount,
+                "per_package": per_package,
+                "per_box": per_box,
+                "per_case": per_case,
+                "cost": cost,
+                "last_checked": last_checked,
+                "created_at": datetime.datetime.now(),
+                "updated_at": datetime.datetime.now()
+            }
+            documents.append(document)
+        
+        if documents:
+            inventory_collection.insert_many(documents)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error restoring state: {e}")
+        return False
+
+def perform_undo():
+    """Undo the last operation"""
+    if 'undo_stack' not in st.session_state or not st.session_state.undo_stack:
+        return False
+    
+    # Save current state to redo stack before undoing
+    current_state = {
+        'data': get_inventory(),
+        'timestamp': datetime.datetime.now(),
+        'action': 'current'
+    }
+    
     if 'redo_stack' not in st.session_state:
         st.session_state.redo_stack = []
     
@@ -1302,91 +1376,13 @@ with tab2:
 st.divider()
 
 # Show undo/redo status in inventory tab only
-if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
+if st.session_state.get('selected_tab', 0) == 0:
     if ('undo_stack' in st.session_state and len(st.session_state.undo_stack) > 0) or ('redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0):
         col_status1, col_status2 = st.columns(2)
         with col_status1:
             if 'undo_stack' in st.session_state and len(st.session_state.undo_stack) > 0:
                 last_action = st.session_state.undo_stack[-1]
-                
+        
         with col_status2:
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
-    
-    # Add current state to undo stack
-    st.session_state.undo_stack.append(current_state)
-    
-    # Keep only last 10 states to manage memory
-    if len(st.session_state.undo_stack) > 10:
-        st.session_state.undo_stack.pop(0)
-    
-    # Clear redo stack when new action is performed
-    st.session_state.redo_stack.clear()
-
-def restore_state_from_history(state_data):
-    """Restore database to a previous state"""
-    if inventory_collection is None:
-        return False
-    
-    try:
-        # Clear current inventory
-        inventory_collection.delete_many({})
-        
-        # Restore previous state
-        documents = []
-        for item in state_data:
-            # Handle different data lengths for backwards compatibility
-            if len(item) == 11:  # New format with all columns including per_package
-                brand, product_name, product_id, min_qty, current_amount, per_package, per_box, per_case, cost, last_checked, item_id = item
-            elif len(item) == 10:  # Previous format without per_package
-                brand, product_name, product_id, min_qty, current_amount, per_box, per_case, cost, last_checked, item_id = item
-                per_package = None
-            elif len(item) == 8:  # Old format without per_box/per_case/per_package
-                brand, product_name, product_id, min_qty, current_amount, cost, last_checked, item_id = item
-                per_package, per_box, per_case = None, None, None
-            else:  # Very old format
-                brand, product_name, product_id, min_qty, current_amount, last_checked, item_id = item
-                cost, per_package, per_box, per_case = 0.0, None, None, None
-            
-            document = {
-                "brand": brand,
-                "product_name": product_name,
-                "product_id": product_id,
-                "minimum_individual_quantity": min_qty,
-                "current_amount": current_amount,
-                "per_package": per_package,
-                "per_box": per_box,
-                "per_case": per_case,
-                "cost": cost,
-                "last_checked": last_checked,
-                "created_at": datetime.datetime.now(),
-                "updated_at": datetime.datetime.now()
-            }
-            documents.append(document)
-        
-        if documents:
-            inventory_collection.insert_many(documents)
-        
-        return True
-    except Exception as e:
-        st.error(f"Error restoring state: {e}")
-        return False
-
-def perform_undo():
-    """Undo the last operation"""
-    if 'undo_stack' not in st.session_state or not st.session_state.undo_stack:
-        return False
-    
-    # Save current state to redo stack before undoing
-    current_state = {
-        'data': get_inventory(),
-        'timestamp': datetime.datetime.now(),
-        'action': 'current'
-    }
-    
-    if 'redo_stack' not in st.session_:
-
-
-
-
-
