@@ -1384,7 +1384,8 @@ def perform_undo():
         'action': 'current'
     }
     
-    if 'redo_stack' not in st.session_
+    if 'redo_stack' not in st.session_:
+
 
 
 
