@@ -718,7 +718,7 @@ with st.sidebar:
         data=csv_data, 
         file_name=f"inventory_{datetime.date.today().strftime('%Y%m%d')}.csv", 
         mime='text/csv',
-        width=stretch,
+        use_container_width=True,
         help="Download inventory data as spreadsheet"
     )
     
@@ -730,7 +730,7 @@ with st.sidebar:
             data=html_report, 
             file_name=f"inventory_report_{datetime.date.today().strftime('%Y%m%d')}.html", 
             mime='text/html',
-            width=stretch,
+            use_container_width=True,
             help="Download formatted inventory report"
         )
     
@@ -752,12 +752,12 @@ with tab1:
             ])
             # Drop the internal ID column for display
             low_stock_df = low_stock_df.drop(columns=['_id'])
-            st.dataframe(low_stock_df, width=stretch, hide_index=True)
+            st.dataframe(low_stock_df, use_container_width=True, hide_index=True)
 
     # --- Add New Item ---
     col1, col2 = st.columns([3, 1])
     with col2:
-        if st.button("Add New Item", width=stretch):
+        if st.button("Add New Item", use_container_width=True):
             st.session_state.show_add_form = not st.session_state.show_add_form
 
     if st.session_state.show_add_form:
@@ -781,9 +781,9 @@ with tab1:
                 
                 col_submit, col_cancel = st.columns(2)
                 with col_submit:
-                    submitted = st.form_submit_button("Add Item", width=stretch)
+                    submitted = st.form_submit_button("Add Item", use_container_width=True)
                 with col_cancel:
-                    if st.form_submit_button("Cancel", width=stretch):
+                    if st.form_submit_button("Cancel", use_container_width=True):
                         st.session_state.show_add_form = False
                         st.rerun()
                 
@@ -806,7 +806,7 @@ with tab1:
 
     with col_undo:
         can_undo = 'undo_stack' in st.session_state and len(st.session_state.undo_stack) > 0
-        if st.button("Undo", width=stretch, disabled=not can_undo):
+        if st.button("Undo", use_container_width=True, disabled=not can_undo):
             if perform_undo():
                 st.success("Undid last operation")
                 st.rerun()
@@ -815,7 +815,7 @@ with tab1:
 
     with col_redo:
         can_redo = 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0
-        if st.button("Redo", width=stretch, disabled=not can_redo):
+        if st.button("Redo", use_container_width=True, disabled=not can_redo):
             if perform_redo():
                 st.success("Redid operation")
                 st.rerun()
@@ -841,7 +841,7 @@ with tab1:
         
         edited_df = st.data_editor(
             display_df,
-            width=stretch,
+            use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
             key="inventory_table",
@@ -863,7 +863,7 @@ with tab1:
         col_save, col_info = st.columns([2, 1])
         
         with col_save:
-            if st.button("Save All Changes", width=stretch, type="primary"):
+            if st.button("Save All Changes", use_container_width=True, type="primary"):
                 try:
                     save_state_to_history()  # Save state before changes
                     
@@ -1094,7 +1094,7 @@ with tab2:
                         
                         with item_col3:
                             # Add to order button
-                            if st.button(f"Add", key=f"add_{item_id}", width=stretch):
+                            if st.button(f"Add", key=f"add_{item_id}", use_container_width=True):
                                 add_to_order(item, quantity)
                                 st.success(f"Added {quantity} x {product_name}")
                                 st.rerun()
@@ -1172,12 +1172,12 @@ with tab2:
                             data=order_html,
                             file_name=f"purchase_order_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.html",
                             mime="text/html",
-                            width=stretch,
+                            use_container_width=True,
                             type="primary"
                         )
                 
                 with col_clear:
-                    if st.button("Clear All", width=stretch):
+                    if st.button("Clear All", use_container_width=True):
                         if st.session_state.get('confirm_clear_order', False):
                             clear_order()
                             st.session_state.confirm_clear_order = False
@@ -1219,4 +1219,5 @@ if st.session_state.get('selected_tab', 0) == 0:  # Only show on inventory tab
             if 'redo_stack' in st.session_state and len(st.session_state.redo_stack) > 0:
                 st.caption(f"Redo {len(st.session_state.redo_stack)} action(s) available")
                 
+
 
